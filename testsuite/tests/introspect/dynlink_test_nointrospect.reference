@@ -1,0 +1,111 @@
+--- Int immediate ---
+42
+
+--- Int boxed ---
+(42, 0)
+
+--- Float immediate ---
+3.140000
+
+--- Float boxed ---
+(3.140000, 0)
+
+--- Char immediate ---
+97
+
+--- Char boxed ---
+(97, 0)
+
+--- Constant (None) immediate ---
+0
+
+--- Constant (None) boxed ---
+(0, 0)
+
+--- Constant (True) immediate ---
+1
+
+--- Constant (True) boxed ---
+(1, 0)
+
+--- List ---
+(1, (2, (3, 0)))
+
+--- Array ---
+(1, 2, 3)
+
+--- Empty Array ---
+()
+
+--- Tuple ---
+(1, "hello", 3.140000)
+
+--- Empty Tuple ---
+0
+
+--- Record ---
+("hello", 42, 1)
+
+--- Poly-variant simple ---
+65
+
+--- Poly-variant with data ---
+(66, "payload")
+
+--- Nested Poly-variant ---
+(67, (68, 1))
+
+--- Built-in ref ---
+(10)
+
+--- Record-based ref ---
+(10)
+
+--- Closure (capturing x) ---
+<closure>
+
+--- Lazy (unevaluated) ---
+<lazy>
+
+--- Lazy (evaluated) ---
+lazy (2)
+
+--- Abstract type ---
+(42)
+
+--- Cyclic List ---
+(1, <cycle>)
+
+--- Prefixed cyclic list ---
+(0, (1, <cycle>))
+
+--- Indirect cycle ---
+(1, (2, (3, <cycle>)))
+
+--- Deeply nested structure ---
+(((("deep", 1, 1), (1, (2, 0))), 0))
+
+--- Constant exception ---
+Foo/
+
+--- Parametrized exception ---
+Bar/ (99)
+
+--- Constant extension ---
+TFoo/
+
+--- Parametrized extension ---
+TBar/ (99)
+
+--- Empty set ---
+0
+
+--- Small set ---
+(0, 1, (0, 2, (0, 3, 0, 1), 2), 3)
+
+--- Empty map ---
+0
+
+--- Small map ---
+(0, 1, "one", (0, 2, "two", (0, 3, "three", 0, 1), 2), 3)
+

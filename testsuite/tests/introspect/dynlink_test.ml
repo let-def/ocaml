@@ -1,21 +1,16 @@
 (* TEST
    readonly_files = "printval.ml";
+   introspect;
    {
-     introspect;
-     reference = "${test_source_directory}/dynlink_test.reference";
-   }{
-     no-introspect;
-     reference = "${test_source_directory}/dynlink_test.no-introspect.reference";
-   }{
      native-dynlink;
      native-compiler;
      setup-ocamlopt.opt-build-env;
-     script = "sh ${test_source_directory}/dynlink_test.sh";
+     script = "sh ${test_source_directory}/dynlink_test.sh dynlink_test.ml";
      script;
      check-program-output;
    }{
      setup-ocamlc.byte-build-env;
-     script = "sh ${test_source_directory}/dynlink_test_bytecode.sh";
+     script = "sh ${test_source_directory}/dynlink_test_bytecode.sh dynlink_test.ml";
      script;
      check-program-output;
    }
