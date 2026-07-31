@@ -233,7 +233,7 @@ let obj_printer ?index ?(max_printer_depth=20) ?(printer_steps=ref max_int) _kin
           let printed_name = Printf.sprintf "%s/%d" name uid in
           let path = Oide_ident {printed_name} in
           Oval_constr (path, list_fields (print (depth - 1)) fields)
-      | Closure  -> Oval_stuff ("<closure>", None)
+      | Closure  -> Oval_stuff ("<fun>", None)
       | Abstract -> Oval_stuff ("<abstract>", None)
       | Custom   -> Oval_stuff ("<custom>", None)
       | Unknown  -> Oval_stuff ("<unknown>", None)
@@ -457,7 +457,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
           | Tvar _ | Tunivar _ ->
               opaque_stuff obj Opaque_polymorphic
           | Tarrow _ | Tfunctor _ ->
-              opaque_stuff obj Opaque_function
+              Oval_stuff ("<fun>", None)
           | Ttuple(labeled_tys) ->
               Oval_tuple (tree_of_labeled_val_list 0 depth obj labeled_tys)
           | Tconstr(path, ty_list, _) -> begin
