@@ -463,7 +463,13 @@ module Dyn = struct
         )
     | _ -> fprintf ppf "<malformed list>"
 
-  let pp_dynval table self ppf : view -> _ = function
+  let lpar ppf cond =
+    if cond then fprintf ppf "(@[<hv>"
+
+  let rpar ppf cond =
+    if cond then fprintf ppf "@])"
+
+  let pp_dynval table self fragile ppf : view -> _ = function
     | String s ->
         fprintf ppf "%S" s
     | Float f ->
@@ -471,37 +477,66 @@ module Dyn = struct
     | Char c ->
         fprintf ppf "%C" c
     | Int_or_constant (i, keys) ->
-        fprintf ppf "%d" i;
-        List.iter (fprintf ppf " or `%s") keys
-    | Constant names ->
-        fprintf ppf "%s" (String.concat " or " names)
+        let protect = fragile && not (List.is_empty keys) in
+        fprintf ppf "%a%d%a%a"
+          lpar protect
+          i
+          (fun ppf -> List.iter (fprintf ppf " or `%s")) keys
+          rpar protect
+    | Constant [] ->
+        fprintf ppf "<invalid constant>"
+    | Constant [name] ->
+        fprintf ppf "%s" name
+    | Constant (name :: names) ->
+        fprintf ppf "%a%s%a%a"
+          lpar fragile
+          name
+          (fun ppf -> List.iter (fprintf ppf " or %s")) names
+          rpar fragile
     | Array arr ->
-        fprintf ppf "[|@[<hv>%a@]|]" (pp_fields self ";") arr
+        fprintf ppf "[|@[<hv>%a@]|]" (pp_fields (self false) ";") arr
     | Tuple { name ="::"; fields } when field_count fields = 2 ->
-        fprintf ppf "[@[<hv>%a@]]" (pp_list_elements table self) fields
+        fprintf ppf "[@[<hv>%a@]]" (pp_list_elements table (self false)) fields
+    | Tuple { name = ""; fields } ->
+        fprintf ppf "(@[<hv>%a@])" (pp_fields (pp_tuple_field (self false)) ",") fields
+    | Tuple { name; fields }
+      when field_count fields = 1 && not fragile && fst (field_get fields 0) = "" ->
+        fprintf ppf "%s @[<hv>%a@]" name (self true) (snd (field_get fields 0))
     | Tuple { name; fields } ->
+        lpar ppf fragile;
         if name <> "" then fprintf ppf "%s " name;
-        fprintf ppf "(@[<hv>%a@])" (pp_fields (pp_tuple_field self) ",") fields
+        fprintf ppf "(@[<hv>%a@])" (pp_fields (pp_tuple_field (self false)) ",") fields;
+        rpar ppf fragile
     | Record {name; fields} ->
+        let protect = fragile && name <> "" in
+        lpar ppf protect;
         if name <> "" then fprintf ppf "%s " name;
-        fprintf ppf "{@[<hv>%a@]}" (pp_fields (pp_record_field self) ";") fields
+        fprintf ppf "{@[<hv>%a@]}" (pp_fields (pp_record_field (self false)) ";") fields;
+        rpar ppf protect
     | Extension (name, uid, fields) when field_count fields = 0 ->
         fprintf ppf "%s/%d" name uid
     | Extension (name, uid, fields) ->
         fprintf ppf "%s/%d (@[<hv>%a@])"
-          name uid (pp_fields self ",") fields
+          name uid (pp_fields (self false) ",") fields
     | Polymorphic_variant (name, payload) ->
-        fprintf ppf "`%s (@[<hv>%a@])" name self payload
+        fprintf ppf "%a`%s @[<hv>%a@]%a"
+          lpar fragile
+          name (self true) payload
+          rpar fragile
     | Closure  -> fprintf ppf "<closure>"
     | Abstract -> fprintf ppf "<abstract>"
     | Custom   -> fprintf ppf "<custom>"
     | Unknown  -> fprintf ppf "<unknown>"
     | Lazy_unforced  -> fprintf ppf "<lazy>"
     | Lazy_forcing   -> fprintf ppf "<lazy (forcing)>"
-    | Lazy_forward d -> fprintf ppf "lazy (@[<hv>%a@])" self d
+    | Lazy_forward d ->
+        fprintf ppf "%alazy @[<hv>%a@]%a"
+          lpar fragile
+          (self true) d
+          rpar fragile
 
-  let pp_raw table ?index ?(depth=20) ?(steps=ref max_int) ppf obj =
-    let rec aux depth ppf obj =
+  let pp_raw table ?index ?(depth=20) ?(steps=ref max_int) fragile ppf obj =
+    let rec aux depth fragile ppf obj =
       if depth <= 0 || !steps <= 0 then
         Format.pp_print_string ppf "..."
       else (
@@ -512,19 +547,19 @@ module Dyn = struct
           Format.pp_print_string ppf "<cycle>"
         else (
           if protect then H.add table raw ();
-          pp_dynval table (aux (depth - 1)) ppf (view ?index obj);
+          pp_dynval table (aux (depth - 1)) fragile ppf (view ?index obj);
           if protect then H.remove table raw
         )
       )
     in
-    aux (depth - 1) ppf obj
+    aux (depth - 1) fragile ppf obj
 
   let pp ?index ?depth ?steps ppf obj =
-    pp_raw (H.create 7) ?index ?depth ?steps ppf obj
+    pp_raw (H.create 7) ?index ?depth ?steps false ppf obj
 
   let pp_view ?index ?depth ?steps ppf view =
     let table = H.create 7 in
-    pp_dynval table (pp_raw table ?index ?depth ?steps) ppf view
+    pp_dynval table (pp_raw table ?index ?depth ?steps) false ppf view
 end
 
 module Print = struct
