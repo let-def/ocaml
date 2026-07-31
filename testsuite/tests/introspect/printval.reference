@@ -50,10 +50,10 @@
 65 or `A
 
 --- Poly-variant with data ---
-`B ("payload")
+`B "payload"
 
 --- Nested Poly-variant ---
-`C (`D (1))
+`C (`D 1)
 
 --- Built-in ref ---
 {contents = 10}
@@ -68,10 +68,10 @@
 <lazy>
 
 --- Lazy (evaluated) ---
-lazy (2)
+lazy 2
 
 --- Abstract type ---
-T (42)
+T 42
 
 --- Cyclic List ---
 [1; <cycle>]
