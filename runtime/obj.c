@@ -437,7 +437,7 @@ CAMLprim value caml_obj_get_reserved(value obj)
 
 CAMLprim value caml_obj_set_reserved(value obj, value res)
 {
-  if (!Is_block(obj))
+  if (!Is_block(obj) || Wosize_val(obj) == 0)
     return Val_bool(0);
 
   unsafe_store_reserved_bits(obj, Long_val(res));
