@@ -5,10 +5,10 @@
 [42]
 
 --- Float immediate ---
-3.140000
+3.14
 
 --- Float boxed ---
-[3.140000]
+[3.14]
 
 --- Char immediate ---
 97
@@ -38,7 +38,7 @@
 ()
 
 --- Tuple ---
-(1, "hello", 3.140000)
+(1, "hello", 3.14)
 
 --- Empty Tuple ---
 0
