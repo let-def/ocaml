@@ -32,15 +32,15 @@ let constant_field (expr:Flambda.t)
 
 let rec loop (program : Flambda.program_body) : Flambda.program_body =
   match program with
-  | Initialize_symbol (symbol, tag, fields, program) ->
+  | Initialize_symbol (symbol, tag, fields, desc, program) ->
     let constant_fields = List.map constant_field fields in
     begin
       match Misc.Stdlib.List.some_if_all_elements_are_some constant_fields
     with
     | None ->
-      Initialize_symbol (symbol, tag, fields, loop program)
+      Initialize_symbol (symbol, tag, fields, desc, loop program)
     | Some fields ->
-      Let_symbol (symbol, Block (tag, fields), loop program)
+      Let_symbol (symbol, Block (tag, fields, desc), loop program)
     end
   | Let_symbol (symbol, const, program) ->
     Let_symbol (symbol, const, loop program)

@@ -1420,7 +1420,7 @@ let constant_defining_value_approx
   match constant_defining_value with
   | Allocated_const const ->
     approx_for_allocated_const const
-  | Block (tag, fields) ->
+  | Block (tag, fields, desc) ->
     let fields =
       List.map
         (function
@@ -1432,7 +1432,7 @@ let constant_defining_value_approx
           | Flambda.Const cst -> simplify_const cst)
         fields
     in
-    A.value_block tag (Array.of_list fields)
+    A.value_block tag (Array.of_list fields) desc
   | Set_of_closures { function_decls; free_vars; specialised_args } ->
     (* At toplevel, there is no freshening currently happening (this
        cannot be the body of a currently inlined function), so we can
@@ -1523,14 +1523,14 @@ let simplify_constant_defining_value
     (* No simplifications are possible for [Allocated_const] or [Block]. *)
     | Allocated_const const ->
       r, constant_defining_value, approx_for_allocated_const const
-    | Block (tag, fields) ->
+    | Block (tag, fields, desc) ->
       let fields = List.map
           (function
             | Flambda.Symbol sym -> E.find_symbol_exn env sym
             | Flambda.Const cst -> simplify_const cst)
           fields
       in
-      r, constant_defining_value, A.value_block tag (Array.of_list fields)
+      r, constant_defining_value, A.value_block tag (Array.of_list fields) desc
     | Set_of_closures set_of_closures ->
       if not (Variable.Map.is_empty set_of_closures.free_vars) then begin
         Misc.fatal_errorf "Set of closures bound by [Let_symbol] is not \
@@ -1607,14 +1607,14 @@ let rec simplify_program_body env r (program : Flambda.program_body)
     let env = E.add_symbol env symbol approx in
     let program, r = simplify_program_body env r program in
     Let_symbol (symbol, constant_defining_value, program), r
-  | Initialize_symbol (symbol, tag, fields, program) ->
+  | Initialize_symbol (symbol, tag, fields, desc, program) ->
     let fields, approxs, r = simplify_list env r fields in
     let approx =
-      A.augment_with_symbol (A.value_block tag (Array.of_list approxs)) symbol
+      A.augment_with_symbol (A.value_block tag (Array.of_list approxs) desc) symbol
     in
     let env = E.add_symbol env symbol approx in
     let program, r = simplify_program_body env r program in
-    Initialize_symbol (symbol, tag, fields, program), r
+    Initialize_symbol (symbol, tag, fields, desc, program), r
   | Effect (expr, program) ->
     let expr, r = simplify env r expr in
     let program, r = simplify_program_body env r program in
@@ -1653,6 +1653,7 @@ let add_predef_exns_to_environment ~env ~backend =
           [| A.value_string (String.length name) (Some name);
              A.value_unknown Other;
           |]
+          Block_desc.empty
       in
       E.add_symbol env symbol (A.augment_with_symbol approx symbol))
     env

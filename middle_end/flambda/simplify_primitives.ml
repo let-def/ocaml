@@ -41,7 +41,7 @@ let phys_equal (approxs:A.t list) =
 let is_known_to_be_some_kind_of_int (arg:A.descr) =
   match arg with
   | Value_int _ | Value_char _ -> true
-  | Value_block (_, _) | Value_float _ | Value_set_of_closures _
+  | Value_block (_, _, _) | Value_float _ | Value_set_of_closures _
   | Value_closure _ | Value_string _ | Value_float_array _
   | A.Value_boxed_int _ | Value_unknown _ | Value_extern _
   | Value_symbol _ | Value_unresolved _ | Value_bottom -> false
@@ -59,7 +59,7 @@ let rec structurally_different (arg1:A.t) (arg2:A.t) =
   | (Value_int n1), (Value_int n2)
     when n1 <> n2 ->
     true
-  | Value_block (tag1, fields1), Value_block (tag2, fields2) ->
+  | Value_block (tag1, fields1, _desc1), Value_block (tag2, fields2, _desc2) ->
     not (Tag.equal tag1 tag2)
     || (Array.length fields1 <> Array.length fields2)
     || Misc.Stdlib.Array.exists2 structurally_different fields1 fields2
@@ -108,7 +108,7 @@ let primitive (p : Clambda_primitives.primitive) (args, approxs)
     : Flambda.named * A.t * Inlining_cost.Benefit.t =
   let fpc = !Clflags.float_const_prop in
   match p with
-  | Pmakeblock(tag_int, Asttypes.Immutable, shape, _bdesc) ->
+  | Pmakeblock(tag_int, Asttypes.Immutable, shape, desc) ->
     let tag = Tag.create_exn tag_int in
     let shape = match shape with
       | None -> List.map (fun _ -> Lambda.Pgenval) args
@@ -116,14 +116,14 @@ let primitive (p : Clambda_primitives.primitive) (args, approxs)
     in
     let approxs = List.map2 A.augment_with_kind approxs shape in
     let shape = List.map2 A.augment_kind_with_approx approxs shape in
-    Prim (Pmakeblock(tag_int, Asttypes.Immutable, Some shape, _bdesc), args, dbg),
-    A.value_block tag (Array.of_list approxs), C.Benefit.zero
+    Prim (Pmakeblock(tag_int, Asttypes.Immutable, Some shape, desc), args, dbg),
+    A.value_block tag (Array.of_list approxs) desc, C.Benefit.zero
   | Praise _ ->
     expr, A.value_bottom, C.Benefit.zero
-  | Pmakearray(_, _, _bdesc) when is_empty approxs ->
+  | Pmakearray(_, _, desc) when is_empty approxs ->
     let shape = Some [] in
-    Prim (Pmakeblock(0, Asttypes.Immutable, shape, _bdesc), [], dbg),
-    A.value_block (Tag.create_exn 0) [||], C.Benefit.zero
+    Prim (Pmakeblock(0, Asttypes.Immutable, shape, desc), [], dbg),
+    A.value_block (Tag.create_exn 0) [||] desc, C.Benefit.zero
   | Pmakearray (Pfloatarray, Mutable, _bdesc) ->
       let approx =
         A.value_mutable_float_array ~size:(List.length args)

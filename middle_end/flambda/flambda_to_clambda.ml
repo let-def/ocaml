@@ -611,10 +611,10 @@ let accumulate_structured_constants t env symbol
   match c with
   | Allocated_const c ->
     Symbol.Map.add symbol (to_clambda_allocated_constant c) acc
-  | Block (tag, fields) ->
+  | Block (tag, fields, desc) ->
     let fields = List.map (to_clambda_const env) fields in
     Symbol.Map.add symbol
-      (Clambda.Uconst_block (Tag.to_int tag, fields, Block_desc.empty)) acc
+      (Clambda.Uconst_block (Tag.to_int tag, fields, desc)) acc
   | Set_of_closures set_of_closures ->
     let to_clambda_set_of_closures =
       to_clambda_closed_set_of_closures t env symbol set_of_closures
@@ -648,7 +648,7 @@ let to_clambda_program t env constants (program : Flambda.program) =
           constants defs
       in
       loop env constants program
-    | Initialize_symbol (symbol, tag, fields, program) ->
+    | Initialize_symbol (symbol, tag, fields, desc, program) ->
       let fields =
         List.mapi (fun i field ->
             i, field,
@@ -684,6 +684,7 @@ let to_clambda_program t env constants (program : Flambda.program) =
           tag = Tag.to_int tag;
           fields = constant_fields;
           provenance = None;
+          block_desc = desc;
         }
       in
       let e2, constants, preallocated_blocks = loop env constants program in

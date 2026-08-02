@@ -45,7 +45,7 @@ type t = {
 }
 
 and descr =
-  | Value_block of Tag.t * t array
+  | Value_block of Tag.t * t array * Block_desc.t
   | Value_int of int
   | Value_char of char
   | Value_float of float option
@@ -171,10 +171,11 @@ let print_function_declarations ppf (fd : function_declarations) =
 let rec print_descr ppf = function
   | Value_int i -> Format.pp_print_int ppf i
   | Value_char c -> Format.fprintf ppf "%c" c
-  | Value_block (tag,fields) ->
+  | Value_block (tag,fields,desc) ->
     let p ppf fields =
       Array.iter (fun v -> Format.fprintf ppf "%a@ " print v) fields in
-    Format.fprintf ppf "[%i:@ @[<1>%a@]]" (Tag.to_int tag) p fields
+    Format.fprintf ppf "[%i:@ @[<1>%a@] (%a)]" (Tag.to_int tag) p fields
+      Block_desc.format desc
   | Value_unknown reason ->
     begin match reason with
     | Unresolved_value value ->
@@ -352,7 +353,7 @@ let value_set_of_closures ?set_of_closures_var value_set_of_closures =
     symbol = None;
   }
 
-let value_block t b = approx (Value_block (t, b))
+let value_block t b desc = approx (Value_block (t, b, desc))
 let value_extern ex = approx (Value_extern ex)
 let value_symbol sym =
   { (approx (Value_symbol sym)) with symbol = Some (sym, None) }
@@ -555,7 +556,7 @@ let warn_on_mutation t =
   if not !Clflags.flambda_invariant_checks then false
   else
     match t.descr with
-    | Value_block(_, fields) -> Array.length fields > 0
+    | Value_block(_, fields, _) -> Array.length fields > 0
     | Value_string { contents = Some _ }
     | Value_int _ | Value_char _
     | Value_set_of_closures _ | Value_float _ | Value_boxed_int _
@@ -570,7 +571,7 @@ type get_field_result =
 
 let get_field t ~field_index:i : get_field_result =
   match t.descr with
-  | Value_block (_tag, fields) ->
+  | Value_block (_tag, fields, _desc) ->
     if i >= 0 && i < Array.length fields then begin
       Ok fields.(i)
     end else begin
@@ -611,12 +612,12 @@ let get_field t ~field_index:i : get_field_result =
 
 type checked_approx_for_block =
   | Wrong
-  | Ok of Tag.t * t array
+  | Ok of Tag.t * t array * Block_desc.t
 
 let check_approx_for_block t =
   match t.descr with
-  | Value_block (tag, fields) ->
-    Ok (tag, fields)
+  | Value_block (tag, fields, desc) ->
+    Ok (tag, fields, desc)
   | Value_bottom
   | Value_int _ | Value_char _
   | Value_float_array _
@@ -677,12 +678,15 @@ let rec meet_descr ~really_import_approx d1 d2 = match d1, d2 with
   | Value_boxed_int (bi1, i1), Value_boxed_int (bi2, i2) when
       equal_boxed_int bi1 i1 bi2 i2 ->
       d1
-  | Value_block (tag1, a1), Value_block (tag2, a2)
+  | Value_block (tag1, a1, desc1), Value_block (tag2, a2, desc2)
     when Tag.compare tag1 tag2 = 0 && Array.length a1 = Array.length a2 ->
     let fields =
       Array.mapi (fun i v -> meet ~really_import_approx v a2.(i)) a1
     in
-    Value_block (tag1, fields)
+    let desc =
+      if Block_desc.compare desc1 desc2 = 0 then desc1 else Block_desc.empty
+    in
+    Value_block (tag1, fields, desc)
   | _ -> Value_unknown Other
 
 and meet ~really_import_approx a1 a2 =
@@ -912,7 +916,7 @@ let potentially_taken_block_switch_branch t tag =
     Can_be_taken
   | (Value_int _| Value_char _) ->
     Cannot_be_taken
-  | Value_block (block_tag, _) when Tag.to_int block_tag = tag ->
+  | Value_block (block_tag, _, _) when Tag.to_int block_tag = tag ->
     Must_be_taken
   | Value_float _ when tag = Obj.double_tag ->
     Must_be_taken

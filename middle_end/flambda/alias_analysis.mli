@@ -27,7 +27,7 @@ type allocated_const =
 
 type constant_defining_value =
   | Allocated_const of allocated_const
-  | Block of Tag.t * Variable.t list
+  | Block of Tag.t * Variable.t list * Block_desc.t
   | Set_of_closures of Flambda.set_of_closures
   | Project_closure of Flambda.project_closure
   | Move_within_set_of_closures of Flambda.move_within_set_of_closures

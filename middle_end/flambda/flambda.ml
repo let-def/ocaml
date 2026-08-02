@@ -148,7 +148,7 @@ and for_loop = {
 
 and constant_defining_value =
   | Allocated_const of Allocated_const.t
-  | Block of Tag.t * constant_defining_value_block_field list
+  | Block of Tag.t * constant_defining_value_block_field list * Block_desc.t
   | Set_of_closures of set_of_closures  (* [free_vars] must be empty *)
   | Project_closure of Symbol.t * Closure_id.t
 
@@ -161,7 +161,7 @@ type expr = t
 type program_body =
   | Let_symbol of Symbol.t * constant_defining_value * program_body
   | Let_rec_symbol of (Symbol.t * constant_defining_value) list * program_body
-  | Initialize_symbol of Symbol.t * Tag.t * t list * program_body
+  | Initialize_symbol of Symbol.t * Tag.t * t list * Block_desc.t * program_body
   | Effect of t * program_body
   | End of Symbol.t
 
@@ -437,8 +437,9 @@ let print_constant_defining_value ppf (const : constant_defining_value) =
   match const with
   | Allocated_const const ->
     fprintf ppf "(Allocated_const %a)" Allocated_const.print const
-  | Block (tag, []) -> fprintf ppf "(Atom (tag %d))" (Tag.to_int tag)
-  | Block (tag, fields) ->
+  | Block (tag, [], desc) ->
+    fprintf ppf "(Atom (tag %d) %a)" (Tag.to_int tag) Block_desc.format desc
+  | Block (tag, fields, desc) ->
     let print_field ppf (field : constant_defining_value_block_field) =
       match field with
       | Symbol symbol -> Symbol.print ppf symbol
@@ -447,8 +448,9 @@ let print_constant_defining_value ppf (const : constant_defining_value) =
     let print_fields ppf =
       List.iter (fprintf ppf "@ %a" print_field)
     in
-    fprintf ppf "(Block (tag %d, %a))" (Tag.to_int tag)
+    fprintf ppf "(Block (tag %d, %a, %a))" (Tag.to_int tag)
       print_fields fields
+      Block_desc.format desc
   | Set_of_closures set_of_closures ->
     fprintf ppf "@[<2>(Set_of_closures (@ %a))@]" print_set_of_closures
       set_of_closures
@@ -481,11 +483,12 @@ let rec print_program_body ppf (program : program_body) =
       "@[<2>let_rec_symbol@ @[%a@]@]@."
       (Format.pp_print_list symbol_binding) defs;
     print_program_body ppf program
-  | Initialize_symbol (symbol, tag, fields, program) ->
-    fprintf ppf "@[<2>initialize_symbol@ (@[<2>%a@ %a@ %a@])@]@."
+  | Initialize_symbol (symbol, tag, fields, desc, program) ->
+    fprintf ppf "@[<2>initialize_symbol@ (@[<2>%a@ %a@ %a@ %a@])@]@."
       Symbol.print symbol
       Tag.print tag
-      (Format.pp_print_list lam) fields;
+      (Format.pp_print_list lam) fields
+      Block_desc.format desc;
     print_program_body ppf program
   | Effect (expr, program) ->
     fprintf ppf "@[<2>effect@ %a@]@."
@@ -929,7 +932,7 @@ let free_symbols_allocated_constant_helper symbols
       (const : constant_defining_value) =
   match const with
   | Allocated_const _ -> ()
-  | Block (_, fields) ->
+  | Block (_, fields, _) ->
     List.iter
       (function
         | (Symbol s : constant_defining_value_block_field) ->
@@ -954,7 +957,7 @@ let free_symbols_program (program : program) =
           free_symbols_allocated_constant_helper symbols const)
         defs;
       loop program
-    | Initialize_symbol (_, _, fields, program) ->
+    | Initialize_symbol (_, _, fields, _desc, program) ->
       List.iter (fun field ->
           symbols := Symbol.Set.union !symbols (free_symbols field))
         fields;
@@ -1193,12 +1196,15 @@ module Constant_defining_value = struct
       match t1, t2 with
       | Allocated_const c1, Allocated_const c2 ->
         Allocated_const.compare c1 c2
-      | Block (tag1, fields1), Block (tag2, fields2) ->
+      | Block (tag1, fields1, desc1), Block (tag2, fields2, desc2) ->
         let c = Tag.compare tag1 tag2 in
-        if c <> 0 then c
-        else
-          Misc.Stdlib.List.compare compare_constant_defining_value_block_field
-            fields1 fields2
+        if c <> 0 then c else
+          let c =
+            Misc.Stdlib.List.compare compare_constant_defining_value_block_field
+              fields1 fields2
+          in
+          if c <> 0 then c else
+            Block_desc.compare desc1 desc2
       | Set_of_closures set1, Set_of_closures set2 ->
         Set_of_closures_id.compare set1.function_decls.set_of_closures_id
           set2.function_decls.set_of_closures_id

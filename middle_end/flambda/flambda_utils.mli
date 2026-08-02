@@ -99,7 +99,7 @@ val name_expr_from_var
 
 val initialize_symbols
    : Flambda.program
-  -> (Symbol.t * Tag.t * Flambda.t list) list
+  -> (Symbol.t * Tag.t * Flambda.t list * Block_desc.t) list
 
 val imported_symbols : Flambda.program -> Symbol.Set.t
 

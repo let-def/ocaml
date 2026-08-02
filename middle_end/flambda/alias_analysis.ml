@@ -28,7 +28,7 @@ type allocated_const =
 
 type constant_defining_value =
   | Allocated_const of allocated_const
-  | Block of Tag.t * Variable.t list
+  | Block of Tag.t * Variable.t list * Block_desc.t
   | Set_of_closures of Flambda.set_of_closures
   | Project_closure of Flambda.project_closure
   | Move_within_set_of_closures of Flambda.move_within_set_of_closures
@@ -54,10 +54,11 @@ let print_constant_defining_value ppf = function
       (Format.pp_print_list Variable.print) vars
   | Allocated_const (Duplicate_array (_, _, var)) ->
     Format.fprintf ppf "dup_array(%a)" Variable.print var
-  | Block (tag, vars) ->
-    Format.fprintf ppf "[|%a: %a|]"
+  | Block (tag, vars, desc) ->
+    Format.fprintf ppf "[|%a: %a (%a)|]"
       Tag.print tag
       (Format.pp_print_list Variable.print) vars
+      Block_desc.format desc
   | Set_of_closures set -> Flambda.print_set_of_closures ppf set
   | Project_closure project -> Flambda.print_project_closure ppf project
   | Move_within_set_of_closures move ->
@@ -114,7 +115,7 @@ and fetch_variable_field
     (field: int)
     ~the_dead_constant : allocation_point =
   match Variable.Tbl.find definitions.variable var with
-  | Block (_, fields) ->
+  | Block (_, fields, _) ->
     begin match List.nth fields field with
     | exception Not_found -> Symbol the_dead_constant
     | v -> fetch_variable definitions v ~the_dead_constant
@@ -134,7 +135,7 @@ and fetch_symbol_field
     (field: int)
     ~the_dead_constant : allocation_point =
   match Symbol.Tbl.find definitions.symbol sym with
-  | Block (_, fields) ->
+  | Block (_, fields, _) ->
     begin match List.nth fields field with
     | exception Not_found -> Symbol the_dead_constant
     | Symbol s -> Symbol s

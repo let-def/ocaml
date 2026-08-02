@@ -104,8 +104,8 @@ let import_descr_for_pack units pack (descr : Export_info.descr)
   | Value_float_array _
   | Export_info.Value_boxed_int _
   | Value_mutable_block _ as desc -> desc
-  | Value_block (tag, fields) ->
-    Value_block (tag, Array.map (import_approx_for_pack units pack) fields)
+  | Value_block (tag, fields, desc) ->
+    Value_block (tag, Array.map (import_approx_for_pack units pack) fields, desc)
   | Value_closure { closure_id; set_of_closures } ->
     Value_closure {
       closure_id;
