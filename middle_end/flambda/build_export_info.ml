@@ -265,22 +265,22 @@ and descr_of_named (env : Env.t) (named : Flambda.named)
   | Read_mutable _ -> Value_unknown
   | Read_symbol_field (sym, i) ->
     begin match Env.get_symbol_descr env sym with
-    | Some (Value_block (_, fields)) when Array.length fields > i -> fields.(i)
+    | Some (Value_block (_, fields, _)) when Array.length fields > i -> fields.(i)
     | _ -> Value_unknown
     end
   | Const const ->
     Value_id (Env.new_descr env (descr_of_constant const))
   | Allocated_const const ->
     Value_id (Env.new_descr env (descr_of_allocated_constant const))
-  | Prim (Pmakeblock (tag, Immutable, _value_kind, _bdesc), args, _dbg) ->
+  | Prim (Pmakeblock (tag, Immutable, _value_kind, desc), args, _dbg) ->
     let approxs = List.map (Env.find_approx env) args in
     let descr : Export_info.descr =
-      Value_block (Tag.create_exn tag, Array.of_list approxs)
+      Value_block (Tag.create_exn tag, Array.of_list approxs, desc)
     in
     Value_id (Env.new_descr env descr)
   | Prim (Pfield (i, _, _), [arg], _) ->
     begin match Env.get_descr env (Env.find_approx env arg) with
-    | Some (Value_block (_, fields)) when Array.length fields > i -> fields.(i)
+    | Some (Value_block (_, fields, _)) when Array.length fields > i -> fields.(i)
     | _ -> Value_unknown
     end
   | Prim _ -> Value_unknown
@@ -414,11 +414,11 @@ let describe_constant_defining_value env export_id symbol
   | Allocated_const alloc_const ->
     let descr = descr_of_allocated_constant alloc_const in
     Env.record_descr env export_id descr
-  | Block (tag, fields) ->
+  | Block (tag, fields, desc) ->
     let approxs =
       List.map (approx_of_constant_defining_value_block_field env) fields
     in
-    Env.record_descr env export_id (Value_block (tag, Array.of_list approxs))
+    Env.record_descr env export_id (Value_block (tag, Array.of_list approxs, desc))
   | Set_of_closures set_of_closures ->
     let descr : Export_info.descr =
       Value_set_of_closures
@@ -497,7 +497,7 @@ let describe_program (env : Env.Global.t) (program : Flambda.program) =
             ~symbols_being_defined def)
         project_closures;
       loop env program
-    | Initialize_symbol (symbol, tag, fields, program) ->
+    | Initialize_symbol (symbol, tag, fields, desc, program) ->
       let id =
         let env =
           (* Assignments of variables to export IDs are local to each
@@ -507,7 +507,7 @@ let describe_program (env : Env.Global.t) (program : Flambda.program) =
         in
         let field_approxs = List.map (approx_of_expr env) fields in
         let descr : Export_info.descr =
-          Value_block (tag, Array.of_list field_approxs)
+          Value_block (tag, Array.of_list field_approxs, desc)
         in
         Env.new_descr env descr
       in

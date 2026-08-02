@@ -28,7 +28,7 @@ let update_constant_for_sharing sharing_symbol_tbl const
   in
   match (const:Flambda.constant_defining_value) with
   | Allocated_const _ -> const
-  | Block (tag, fields) ->
+  | Block (tag, fields, desc) ->
     let subst_field (field:Flambda.constant_defining_value_block_field) :
       Flambda.constant_defining_value_block_field =
       match field with
@@ -37,7 +37,7 @@ let update_constant_for_sharing sharing_symbol_tbl const
         Symbol (substitute_symbol sym)
     in
     let fields = List.map subst_field fields in
-    Block (tag, fields)
+    Block (tag, fields, desc)
   | Set_of_closures set_of_closures ->
     Set_of_closures (
       Flambda_iterators.map_symbols_on_set_of_closures
@@ -75,7 +75,7 @@ let rec end_symbol (program : Flambda.program_body) =
   | End symbol -> symbol
   | Let_symbol (_, _, program)
   | Let_rec_symbol (_, program)
-  | Initialize_symbol (_, _, _, program)
+  | Initialize_symbol (_, _, _, _, program)
   | Effect (_, program) ->
     end_symbol program
 
@@ -103,7 +103,7 @@ let share_constants (program : Flambda.program) =
           defs
       in
       Let_rec_symbol (defs, loop program)
-    | Initialize_symbol (symbol,tag,fields,program) ->
+    | Initialize_symbol (symbol,tag,fields,desc,program) ->
       let fields =
         List.map (fun field ->
             Flambda_iterators.map_symbols
@@ -113,7 +113,7 @@ let share_constants (program : Flambda.program) =
               field)
           fields
       in
-      Initialize_symbol (symbol,tag,fields,loop program)
+      Initialize_symbol (symbol,tag,fields,desc,loop program)
     | Effect (expr,program) ->
       let expr =
         Flambda_iterators.map_symbols

@@ -121,7 +121,7 @@ type t = private {
 }
 
 and descr = private
-  | Value_block of Tag.t * t array
+  | Value_block of Tag.t * t array * Block_desc.t
   | Value_int of int
   | Value_char of char
   | Value_float of float option
@@ -248,7 +248,7 @@ val value_mutable_float_array : size:int -> t
 val value_immutable_float_array : t array -> t
 val value_string : int -> string option -> t
 val value_boxed_int : 'i boxed_int -> 'i -> t
-val value_block : Tag.t -> t array -> t
+val value_block : Tag.t -> t array -> Block_desc.t -> t
 val value_extern : Export_id.t -> t
 val value_symbol : Symbol.t -> t
 val value_bottom : t
@@ -383,7 +383,7 @@ val get_field : t -> field_index:int -> get_field_result
 
 type checked_approx_for_block =
   | Wrong
-  | Ok of Tag.t * t array
+  | Ok of Tag.t * t array * Block_desc.t
 
 (** Try to prove that a value with the given approximation may be used
     as a block. *)

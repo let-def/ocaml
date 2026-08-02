@@ -47,6 +47,7 @@ let lambda_to_clambda ~backend ~prefixname:_ ~ppf_dump
       tag = 0;
       fields = List.init lambda.main_module_block_size (fun _ -> None);
       provenance = Some provenance;
+      block_desc = Block_desc.empty;
     }
   in
   let constants = Compilenv.structured_constants () in

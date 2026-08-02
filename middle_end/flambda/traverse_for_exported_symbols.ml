@@ -191,7 +191,7 @@ let traverse
       | Q_export_id export_id ->
         begin match Export_id.Map.find export_id values with
         | exception Not_found -> ()
-        | Value_block (_, approxes) ->
+        | Value_block (_, approxes, _) ->
           Array.iter process_approx approxes
         | Value_closure value_closure ->
           process_value_set_of_closures value_closure.set_of_closures

@@ -50,6 +50,7 @@ let ignore_tag (_ : Tag.t) = ()
 let ignore_inline_attribute (_ : Lambda.inline_attribute) = ()
 let ignore_specialise_attribute (_ : Lambda.specialise_attribute) = ()
 let ignore_value_kind (_ : Lambda.value_kind) = ()
+let ignore_block_desc (_ : Block_desc.t) = ()
 
 exception Binding_occurrence_not_from_current_compilation_unit of Variable.t
 exception Mutable_binding_occurrence_not_from_current_compilation_unit of
@@ -387,13 +388,14 @@ let variable_and_symbol_invariants (program : Flambda.program) =
     match const with
     | Flambda.Allocated_const c ->
       ignore_allocated_const c
-    | Flambda.Block (tag,fields) ->
+    | Flambda.Block (tag,fields,desc) ->
       ignore_tag tag;
       List.iter (fun (fields : Flambda.constant_defining_value_block_field) ->
           match fields with
           | Const c -> ignore_const c
           | Symbol s -> check_symbol_is_bound env s)
-        fields
+        fields;
+      ignore_block_desc desc
     | Flambda.Set_of_closures set_of_closures ->
       loop_set_of_closures env set_of_closures;
       (* Constant set of closures must not have free variables *)
@@ -421,7 +423,7 @@ let variable_and_symbol_invariants (program : Flambda.program) =
       loop_constant_defining_value env def;
       let env = add_binding_occurrence_of_symbol env symbol in
       loop_program_body env program
-    | Initialize_symbol (symbol, _tag, fields, program) ->
+    | Initialize_symbol (symbol, _tag, fields, _desc, program) ->
       List.iter (loop env) fields;
       let env = add_binding_occurrence_of_symbol env symbol in
       loop_program_body env program

@@ -26,7 +26,7 @@ let constant_dependencies (const:Flambda.constant_defining_value) =
   in
   match const with
   | Allocated_const _ -> Symbol.Set.empty
-  | Block (_, fields) ->
+  | Block (_, fields, _) ->
     let symbol_fields =
       List.filter_map (function
           | (Symbol s : Flambda.constant_defining_value_block_field) ->
@@ -74,7 +74,7 @@ let rec loop (program : Flambda.program_body)
       | [] -> program, dep
       | _ -> Let_rec_symbol (defs, program), dep
     end
-  | Initialize_symbol (sym, tag, fields, program) ->
+  | Initialize_symbol (sym, tag, fields, desc, program) ->
     let program, dep = loop program in
     if Symbol.Set.mem sym dep then
       let dep =
@@ -82,7 +82,7 @@ let rec loop (program : Flambda.program_body)
             Symbol.Set.union dep (dependency field))
           dep fields
       in
-      Initialize_symbol (sym, tag, fields, program), dep
+      Initialize_symbol (sym, tag, fields, desc, program), dep
     else begin
       List.fold_left
         (fun (program, dep) field ->

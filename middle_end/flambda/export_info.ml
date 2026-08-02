@@ -37,7 +37,7 @@ type value_float_array = {
 }
 
 type descr =
-  | Value_block of Tag.t * approx array
+  | Value_block of Tag.t * approx array * Block_desc.t
   | Value_mutable_block of Tag.t * int
   | Value_int of int
   | Value_char of char
@@ -103,8 +103,9 @@ let equal_descr (d1:descr) (d2:descr) : bool =
   match d1, d2 with
   | Value_unknown_descr, Value_unknown_descr ->
     true
-  | Value_block (t1, f1), Value_block (t2, f2) ->
+  | Value_block (t1, f1, desc1), Value_block (t2, f2, desc2) ->
     Tag.equal t1 t2 && equal_array equal_approx f1 f2
+    && Block_desc.compare desc1 desc2 = 0
   | Value_mutable_block (t1, s1), Value_mutable_block (t2, s2) ->
     Tag.equal t1 t2 &&
     s1 = s2
@@ -125,12 +126,12 @@ let equal_descr (d1:descr) (d2:descr) : bool =
     equal_set_of_closures c1.set_of_closures c2.set_of_closures
   | Value_set_of_closures s1, Value_set_of_closures s2 ->
     equal_set_of_closures s1 s2
-  | ( Value_block (_, _) | Value_mutable_block (_, _) | Value_int _
+  | ( Value_block (_, _, _) | Value_mutable_block (_, _) | Value_int _
     | Value_char _ | Value_float _ | Value_float_array _
     | Value_boxed_int _ | Value_string _ | Value_closure _
     | Value_set_of_closures _
     | Value_unknown_descr ),
-    ( Value_block (_, _) | Value_mutable_block (_, _) | Value_int _
+    ( Value_block (_, _, _) | Value_mutable_block (_, _) | Value_int _
     | Value_char _ | Value_float _ | Value_float_array _
     | Value_boxed_int _ | Value_string _ | Value_closure _
     | Value_set_of_closures _
@@ -385,10 +386,11 @@ let print_raw_descr ppf descr =
     Array.iter (fun approx -> fprintf ppf "%a " print_raw_approx approx) arr
   in
   match descr with
-  | Value_block (tag, approx_array) ->
-    fprintf ppf "(Value_block (%a %a))"
+  | Value_block (tag, approx_array, desc) ->
+    fprintf ppf "(Value_block (%a %a (%a)))"
       Tag.print tag
       print_approx_array approx_array
+      Block_desc.format desc
   | Value_mutable_block (tag, i) ->
     fprintf ppf "(Value_mutable-block (%a %d))" Tag.print tag i
   | Value_int i -> fprintf ppf "(Value_int %d)" i
@@ -441,8 +443,9 @@ let print_approx_components ppf ~symbol_id ~values
     match descr with
     | Value_int i -> Format.pp_print_int ppf i
     | Value_char c -> fprintf ppf "%c" c
-    | Value_block (tag, fields) ->
-      fprintf ppf "[%a:%a]" Tag.print tag print_fields fields
+    | Value_block (tag, fields, desc) ->
+      fprintf ppf "[%a:%a(%a)]" Tag.print tag print_fields fields
+        Block_desc.format desc
     | Value_mutable_block (tag, size) ->
       fprintf ppf "[mutable %a:%i]" Tag.print tag size
     | Value_closure {closure_id; set_of_closures} ->

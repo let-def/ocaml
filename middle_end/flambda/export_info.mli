@@ -40,7 +40,7 @@ type value_float_array = {
 }
 
 type descr =
-  | Value_block of Tag.t * approx array
+  | Value_block of Tag.t * approx array * Block_desc.t
   | Value_mutable_block of Tag.t * int
   | Value_int of int
   | Value_char of char

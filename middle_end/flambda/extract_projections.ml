@@ -69,7 +69,7 @@ let known_valid_projections ~env ~projections ~which_variables =
       | Field (field_index, _) ->
         match A.check_approx_for_block approx with
         | Wrong -> false
-        | Ok (_tag, fields) ->
+        | Ok (_tag, fields, _desc) ->
           field_index >= 0 && field_index < Array.length fields)
     projections
 

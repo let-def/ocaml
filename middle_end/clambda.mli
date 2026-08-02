@@ -143,6 +143,7 @@ type preallocated_block = {
   tag : int;
   fields : uconstant_block_field option list;
   provenance : usymbol_provenance option;
+  block_desc : Block_desc.t;
 }
 
 type preallocated_constant = {
