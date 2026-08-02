@@ -18,7 +18,7 @@
 open! Int_replace_polymorphic_compare
 
 type ('a, 'b) kind =
-  | Initialisation of (Symbol.t * Tag.t * Flambda.t list)
+  | Initialisation of (Symbol.t * Tag.t * Flambda.t list * Block_desc.t)
   | Effect of 'b
 
 let should_copy (named:Flambda.named) =
@@ -28,7 +28,7 @@ let should_copy (named:Flambda.named) =
 
 type extracted =
   | Expr of Variable.t * Flambda.t
-  | Block of Variable.t * Tag.t * Variable.t list
+  | Block of Variable.t * Tag.t * Variable.t list * Block_desc.t
 
 type accumulated = {
   copied_lets : (Variable.t * Flambda.named) list;
@@ -65,7 +65,7 @@ let rec accumulate ~substitution ~copied_lets ~extracted_lets
     let extracted =
       let renamed = Variable.rename var in
       match named with
-      | Prim (Pmakeblock (tag, Asttypes.Immutable, _value_kind, _bdesc), args, _dbg) ->
+      | Prim (Pmakeblock (tag, Asttypes.Immutable, _value_kind, desc), args, _dbg) ->
         let tag = Tag.create_exn tag in
         let args =
           List.map (fun v ->
@@ -73,7 +73,7 @@ let rec accumulate ~substitution ~copied_lets ~extracted_lets
               with Not_found -> v)
             args
         in
-        Block (var, tag, args)
+        Block (var, tag, args, desc)
       | named ->
         let expr =
           Flambda_utils.toplevel_substitution substitution
@@ -121,7 +121,7 @@ let rebuild (used_variables:Variable.Set.t) (accumulated:accumulated) =
   let accumulated_extracted_lets =
     List.map (fun decl ->
         match decl with
-        | Block (var, _, _) | Expr (var, _) ->
+        | Block (var, _, _, _) | Expr (var, _) ->
           Symbol.of_variable (Variable.rename var), decl)
       accumulated.extracted_lets
   in
@@ -139,7 +139,7 @@ let rebuild (used_variables:Variable.Set.t) (accumulated:accumulated) =
          field of the field 0 of the symbol. *)
     List.fold_left (fun map (symbol, decl) ->
         match decl with
-        | Block (var, _tag, _fields) ->
+        | Block (var, _tag, _fields, _desc) ->
           Variable.Map.add var (symbol, []) map
         | Expr (var, _expr) ->
           Variable.Map.add var (symbol, [0]) map)
@@ -157,17 +157,18 @@ let rebuild (used_variables:Variable.Set.t) (accumulated:accumulated) =
             Initialisation
               (symbol,
                Tag.create_exn 0,
-               [expr])
+               [expr],
+               Block_desc.empty)
           else
             Effect expr
-        | Block (_var, tag, fields) ->
+        | Block (_var, tag, fields, desc) ->
           let fields =
             List.map (fun var ->
                 rebuild_expr ~extracted_definitions ~copied_definitions
                   ~substitute:true (Var var))
               fields
           in
-          Initialisation (symbol, tag, fields))
+          Initialisation (symbol, tag, fields, desc))
       accumulated_extracted_lets
   in
   let terminator =
@@ -192,8 +193,8 @@ let introduce_symbols expr =
 let add_extracted introduced program =
   List.fold_right (fun extracted program ->
       match extracted with
-      | Initialisation (symbol, tag, def) ->
-        Flambda.Initialize_symbol (symbol, tag, def, program)
+      | Initialisation (symbol, tag, def, desc) ->
+        Flambda.Initialize_symbol (symbol, tag, def, desc, program)
       | Effect eff ->
         Flambda.Effect (eff, program))
     introduced program
@@ -209,18 +210,18 @@ let rec split_program (program : Flambda.program_body) : Flambda.program_body =
     let program = split_program program in
     let introduced, expr = introduce_symbols expr in
     add_extracted introduced (Flambda.Effect (expr, program))
-  | Initialize_symbol (symbol, tag, ((_::_::_) as fields), program) ->
+  | Initialize_symbol (symbol, tag, ((_::_::_) as fields), desc, program) ->
     (* CR-someday pchambart: currently the only initialize_symbol with more
        than 1 field is the module block. This could evolve, in that case
        this pattern should be handled properly. *)
-    Initialize_symbol (symbol, tag, fields, split_program program)
-  | Initialize_symbol (sym, tag, [], program) ->
-    Let_symbol (sym, Block (tag, []), split_program program)
-  | Initialize_symbol (symbol, tag, [field], program) ->
+    Initialize_symbol (symbol, tag, fields, desc, split_program program)
+  | Initialize_symbol (sym, tag, [], desc, program) ->
+    Let_symbol (sym, Block (tag, [], desc), split_program program)
+  | Initialize_symbol (symbol, tag, [field], desc, program) ->
     let program = split_program program in
     let introduced, field = introduce_symbols field in
     add_extracted introduced
-      (Flambda.Initialize_symbol (symbol, tag, [field], program))
+      (Flambda.Initialize_symbol (symbol, tag, [field], desc, program))
 
 let lift ~backend:_ (program : Flambda.program) =
   { program with

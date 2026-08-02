@@ -447,7 +447,7 @@ module Inconstants (P:Param) (Backend:Backend_intf.S) = struct
     let rec loop (program : Flambda.program_body) =
       match program with
       | End _ -> ()
-      | Initialize_symbol (symbol,_tag,fields,program) ->
+      | Initialize_symbol (symbol,_tag,fields,_desc,program) ->
         List.iteri (fun i field ->
             mark_loop ~toplevel:true
               [Symbol symbol; Symbol_field (symbol,i)] field)

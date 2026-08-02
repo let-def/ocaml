@@ -354,7 +354,7 @@ and constant_defining_value =
   | Allocated_const of Allocated_const.t
     (** A single constant.  These are never "simple constants" (type [const])
         but instead more complicated constructions. *)
-  | Block of Tag.t * constant_defining_value_block_field list
+  | Block of Tag.t * constant_defining_value_block_field list * Block_desc.t
     (** A pre-allocated block full of constants (either simple constants
         or references to other constants, see below). *)
   | Set_of_closures of set_of_closures
@@ -399,7 +399,7 @@ type program_body =
       approximation of the set of closures to be present in order to
       correctly simplify the [Project_closure] construction.  (See
       [Inline_and_simplify.simplify_project_closure] for that part.) *)
-  | Initialize_symbol of Symbol.t * Tag.t * t list * program_body
+  | Initialize_symbol of Symbol.t * Tag.t * t list * Block_desc.t * program_body
   (** Define the given symbol as a constant block of the given size and
       tag; but with a possibly non-constant initializer.  The initializer
       will be executed at most once (from the entry point of the compilation
