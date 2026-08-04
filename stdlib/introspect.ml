@@ -166,6 +166,9 @@ module Index = struct
         | tags -> Hashtbl.replace t.descriptors i (tag :: tags)
         end
 
+  let register t desc =
+    if enabled then register t desc
+
   let make () =
     let result = raw_make () in
     register result Desc.unknown;
