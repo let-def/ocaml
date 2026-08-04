@@ -305,7 +305,9 @@ module Dyn = struct
     else
       let osize = Obj.size obj in
       let select = function
-        | Desc.Array _ -> true
+        | Desc.Array _ ->
+            otag <= Obj.last_non_constant_constructor_tag
+            || otag = Obj.double_array_tag
         | Desc.Polymorphic_variant -> osize = 2
         | Desc.Tuple t ->
             otag = t.tag && osize = Array.length t.fields
