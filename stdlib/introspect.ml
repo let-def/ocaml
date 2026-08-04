@@ -125,7 +125,7 @@ module Desc = struct
     | Record { name; tag; fields } ->
         hash_array (hash_combine (hash_combine 6 tag) name) fields
     | Polymorphic_variant -> 7
-    | Polymorphic_variant_constant _ -> 0
+    | Polymorphic_variant_constant _ -> 8
 
   external read_self_descriptors : unit -> t list =
     "caml_read_bdsc_section"
