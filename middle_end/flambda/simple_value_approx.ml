@@ -679,14 +679,13 @@ let rec meet_descr ~really_import_approx d1 d2 = match d1, d2 with
       equal_boxed_int bi1 i1 bi2 i2 ->
       d1
   | Value_block (tag1, a1, desc1), Value_block (tag2, a2, desc2)
-    when Tag.compare tag1 tag2 = 0 && Array.length a1 = Array.length a2 ->
+    when Tag.compare tag1 tag2 = 0 && Array.length a1 = Array.length a2 &&
+         Block_desc.compare desc1 desc2 = 0
+    ->
     let fields =
       Array.mapi (fun i v -> meet ~really_import_approx v a2.(i)) a1
     in
-    let desc =
-      if Block_desc.compare desc1 desc2 = 0 then desc1 else Block_desc.empty
-    in
-    Value_block (tag1, fields, desc)
+    Value_block (tag1, fields, desc1)
   | _ -> Value_unknown Other
 
 and meet ~really_import_approx a1 a2 =
