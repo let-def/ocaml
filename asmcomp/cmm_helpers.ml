@@ -2809,7 +2809,7 @@ let emit_gc_roots_table ~symbols cont =
 (* Build preallocated blocks (used for Flambda [Initialize_symbol]
    constructs, and Clambda global module) *)
 
-let preallocate_block cont { Clambda.symbol; exported; tag; fields } =
+let preallocate_block cont { Clambda.symbol; exported; tag; fields; block_desc } =
   let space =
     (* These words will be registered as roots and as such must contain
        valid values, in case we are in no-naked-pointers mode.  Likewise
@@ -2827,9 +2827,8 @@ let preallocate_block cont { Clambda.symbol; exported; tag; fields } =
   in
   let global = Cmmgen_state.(if exported then Global else Local) in
   let symb = (symbol, global) in
-  let data =
-    emit_block symb (block_header tag (List.length fields)) space
-  in
+  let header = block_header ~desc:block_desc tag (List.length fields) in
+  let data = emit_block symb header space in
   Cdata data :: cont
 
 let emit_preallocated_blocks preallocated_blocks cont =
