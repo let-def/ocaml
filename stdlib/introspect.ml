@@ -125,7 +125,7 @@ module Desc = struct
     | Record { name; tag; fields } ->
         hash_array (hash_combine (hash_combine 6 tag) name) fields
     | Polymorphic_variant -> 7
-    | Polymorphic_variant_constant _ -> 0
+    | Polymorphic_variant_constant _ -> 8
 
   external read_self_descriptors : unit -> t list =
     "caml_read_bdsc_section"
@@ -165,6 +165,9 @@ module Index = struct
         | exception Not_found -> Hashtbl.add t.descriptors i [tag]
         | tags -> Hashtbl.replace t.descriptors i (tag :: tags)
         end
+
+  let register t desc =
+    if enabled then register t desc
 
   let make () =
     let result = raw_make () in
@@ -302,7 +305,9 @@ module Dyn = struct
     else
       let osize = Obj.size obj in
       let select = function
-        | Desc.Array _ -> true
+        | Desc.Array _ ->
+            otag <= Obj.last_non_constant_constructor_tag
+            || otag = Obj.double_array_tag
         | Desc.Polymorphic_variant -> osize = 2
         | Desc.Tuple t ->
             otag = t.tag && osize = Array.length t.fields
