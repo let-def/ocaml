@@ -218,6 +218,11 @@ void caml_debugger_init(void)
   marshal_flags = flags;
   caml_register_generational_global_root(&marshal_flags);
 
+  flags = caml_alloc(2, Tag_cons);
+  Store_field(flags, 0, Val_int(4)); /* Marshal.Reserved_bits */
+  Store_field(flags, 1, marshal_flags);
+  caml_modify_generational_global_root(&marshal_flags, flags);
+
   a = caml_secure_getenv(T("CAML_DEBUG_SOCKET"));
   address = a ? caml_stat_strdup_of_os(a) : NULL;
   if (address == NULL) return;
