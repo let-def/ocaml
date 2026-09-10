@@ -221,6 +221,8 @@ let load_compunit ic filename ppf compunit =
   let initial_symtable = Symtable.current_state() in
   Symtable.patch_object code compunit.cu_reloc;
   Symtable.update_global_table();
+  Introspect.Index.add_dynamic_library
+    (compunit.cu_block_descs : Block_desc.library :> _ list);
   let events =
     if compunit.cu_debug = 0 then [| |]
     else begin
