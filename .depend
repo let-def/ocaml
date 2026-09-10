@@ -4271,6 +4271,7 @@ middle_end/clambda.cmi : \
     typing/ident.cmi \
     lambda/debuginfo.cmi \
     middle_end/clambda_primitives.cmi \
+    lambda/block_desc.cmi \
     middle_end/backend_var.cmi \
     parsing/asttypes.cmi
 middle_end/clambda_primitives.cmo : \
@@ -5175,6 +5176,7 @@ middle_end/closure/closure_middle_end.cmo : \
     middle_end/closure/closure.cmi \
     utils/clflags.cmi \
     middle_end/clambda.cmi \
+    lambda/block_desc.cmi \
     middle_end/closure/closure_middle_end.cmi
 middle_end/closure/closure_middle_end.cmx : \
     middle_end/printclambda.cmx \
@@ -5185,6 +5187,7 @@ middle_end/closure/closure_middle_end.cmx : \
     middle_end/closure/closure.cmx \
     utils/clflags.cmx \
     middle_end/clambda.cmx \
+    lambda/block_desc.cmx \
     middle_end/closure/closure_middle_end.cmi
 middle_end/closure/closure_middle_end.cmi : \
     lambda/lambda.cmi \
@@ -5199,6 +5202,7 @@ middle_end/flambda/alias_analysis.cmo : \
     lambda/lambda.cmi \
     utils/int_replace_polymorphic_compare.cmi \
     middle_end/flambda/flambda.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/alias_analysis.cmi
@@ -5211,6 +5215,7 @@ middle_end/flambda/alias_analysis.cmx : \
     lambda/lambda.cmx \
     utils/int_replace_polymorphic_compare.cmx \
     middle_end/flambda/flambda.cmx \
+    lambda/block_desc.cmx \
     parsing/asttypes.cmx \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/alias_analysis.cmi
@@ -5220,6 +5225,7 @@ middle_end/flambda/alias_analysis.cmi : \
     middle_end/symbol.cmi \
     lambda/lambda.cmi \
     middle_end/flambda/flambda.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/allocated_const.cmi
 middle_end/flambda/allocated_const.cmo : \
@@ -5351,6 +5357,7 @@ middle_end/flambda/closure_conversion.cmo : \
     middle_end/flambda/closure_conversion_aux.cmi \
     utils/clflags.cmi \
     middle_end/clambda_primitives.cmi \
+    lambda/block_desc.cmi \
     middle_end/backend_intf.cmi \
     middle_end/flambda/closure_conversion.cmi
 middle_end/flambda/closure_conversion.cmx : \
@@ -5381,6 +5388,7 @@ middle_end/flambda/closure_conversion.cmx : \
     middle_end/flambda/closure_conversion_aux.cmx \
     utils/clflags.cmx \
     middle_end/clambda_primitives.cmx \
+    lambda/block_desc.cmx \
     middle_end/backend_intf.cmi \
     middle_end/flambda/closure_conversion.cmi
 middle_end/flambda/closure_conversion.cmi : \
@@ -5462,6 +5470,7 @@ middle_end/flambda/export_info.cmo : \
     middle_end/flambda/base_types/export_id.cmi \
     middle_end/compilation_unit.cmi \
     middle_end/flambda/base_types/closure_id.cmi \
+    lambda/block_desc.cmi \
     middle_end/flambda/export_info.cmi
 middle_end/flambda/export_info.cmx : \
     middle_end/variable.cmx \
@@ -5474,6 +5483,7 @@ middle_end/flambda/export_info.cmx : \
     middle_end/flambda/base_types/export_id.cmx \
     middle_end/compilation_unit.cmx \
     middle_end/flambda/base_types/closure_id.cmx \
+    lambda/block_desc.cmx \
     middle_end/flambda/export_info.cmi
 middle_end/flambda/export_info.cmi : \
     middle_end/variable.cmi \
@@ -5485,7 +5495,8 @@ middle_end/flambda/export_info.cmi : \
     middle_end/flambda/flambda.cmi \
     middle_end/flambda/base_types/export_id.cmi \
     middle_end/compilation_unit.cmi \
-    middle_end/flambda/base_types/closure_id.cmi
+    middle_end/flambda/base_types/closure_id.cmi \
+    lambda/block_desc.cmi
 middle_end/flambda/export_info_for_pack.cmo : \
     middle_end/variable.cmi \
     middle_end/flambda/base_types/var_within_closure.cmi \
@@ -5589,6 +5600,7 @@ middle_end/flambda/flambda.cmo : \
     middle_end/flambda/base_types/closure_id.cmi \
     utils/clflags.cmi \
     middle_end/clambda_primitives.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/flambda.cmi
@@ -5615,6 +5627,7 @@ middle_end/flambda/flambda.cmx : \
     middle_end/flambda/base_types/closure_id.cmx \
     utils/clflags.cmx \
     middle_end/clambda_primitives.cmx \
+    lambda/block_desc.cmx \
     parsing/asttypes.cmx \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/flambda.cmi
@@ -5635,6 +5648,7 @@ middle_end/flambda/flambda.cmi : \
     middle_end/flambda/base_types/closure_origin.cmi \
     middle_end/flambda/base_types/closure_id.cmi \
     middle_end/clambda_primitives.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/allocated_const.cmi
 middle_end/flambda/flambda_invariants.cmo : \
@@ -5658,6 +5672,7 @@ middle_end/flambda/flambda_invariants.cmo : \
     middle_end/compilation_unit.cmi \
     middle_end/flambda/base_types/closure_id.cmi \
     middle_end/clambda_primitives.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/flambda_invariants.cmi
@@ -5682,6 +5697,7 @@ middle_end/flambda/flambda_invariants.cmx : \
     middle_end/compilation_unit.cmx \
     middle_end/flambda/base_types/closure_id.cmx \
     middle_end/clambda_primitives.cmx \
+    lambda/block_desc.cmx \
     parsing/asttypes.cmx \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/flambda_invariants.cmi
@@ -5802,7 +5818,6 @@ middle_end/flambda/flambda_to_clambda.cmo : \
     middle_end/flambda/base_types/closure_id.cmi \
     utils/clflags.cmi \
     middle_end/clambda.cmi \
-    lambda/block_desc.cmi \
     middle_end/backend_var.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/flambda_to_clambda.cmi
@@ -5833,7 +5848,6 @@ middle_end/flambda/flambda_to_clambda.cmx : \
     middle_end/flambda/base_types/closure_id.cmx \
     utils/clflags.cmx \
     middle_end/clambda.cmx \
-    lambda/block_desc.cmx \
     middle_end/backend_var.cmx \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/flambda_to_clambda.cmi
@@ -5904,7 +5918,8 @@ middle_end/flambda/flambda_utils.cmi : \
     middle_end/flambda/parameter.cmi \
     middle_end/internal_variable_names.cmi \
     middle_end/flambda/flambda.cmi \
-    middle_end/flambda/base_types/closure_id.cmi
+    middle_end/flambda/base_types/closure_id.cmi \
+    lambda/block_desc.cmi
 middle_end/flambda/freshening.cmo : \
     middle_end/variable.cmi \
     middle_end/flambda/base_types/var_within_closure.cmi \
@@ -6070,6 +6085,7 @@ middle_end/flambda/inline_and_simplify.cmo : \
     middle_end/flambda/base_types/closure_id.cmi \
     utils/clflags.cmi \
     middle_end/clambda_primitives.cmi \
+    lambda/block_desc.cmi \
     middle_end/backend_intf.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/inline_and_simplify.cmi
@@ -6113,6 +6129,7 @@ middle_end/flambda/inline_and_simplify.cmx : \
     middle_end/flambda/base_types/closure_id.cmx \
     utils/clflags.cmx \
     middle_end/clambda_primitives.cmx \
+    lambda/block_desc.cmx \
     middle_end/backend_intf.cmi \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/inline_and_simplify.cmi
@@ -6403,6 +6420,7 @@ middle_end/flambda/lift_constants.cmo : \
     middle_end/flambda/flambda.cmi \
     middle_end/compilation_unit.cmi \
     middle_end/flambda/base_types/closure_id.cmi \
+    lambda/block_desc.cmi \
     middle_end/backend_intf.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/allocated_const.cmi \
@@ -6424,6 +6442,7 @@ middle_end/flambda/lift_constants.cmx : \
     middle_end/flambda/flambda.cmx \
     middle_end/compilation_unit.cmx \
     middle_end/flambda/base_types/closure_id.cmx \
+    lambda/block_desc.cmx \
     middle_end/backend_intf.cmi \
     parsing/asttypes.cmx \
     middle_end/flambda/allocated_const.cmx \
@@ -6439,6 +6458,7 @@ middle_end/flambda/lift_let_to_initialize_symbol.cmo : \
     utils/int_replace_polymorphic_compare.cmi \
     middle_end/flambda/flambda_utils.cmi \
     middle_end/flambda/flambda.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     middle_end/flambda/lift_let_to_initialize_symbol.cmi
 middle_end/flambda/lift_let_to_initialize_symbol.cmx : \
@@ -6448,6 +6468,7 @@ middle_end/flambda/lift_let_to_initialize_symbol.cmx : \
     utils/int_replace_polymorphic_compare.cmx \
     middle_end/flambda/flambda_utils.cmx \
     middle_end/flambda/flambda.cmx \
+    lambda/block_desc.cmx \
     parsing/asttypes.cmx \
     middle_end/flambda/lift_let_to_initialize_symbol.cmi
 middle_end/flambda/lift_let_to_initialize_symbol.cmi : \
@@ -6641,6 +6662,7 @@ middle_end/flambda/simple_value_approx.cmo : \
     middle_end/flambda/base_types/closure_origin.cmi \
     middle_end/flambda/base_types/closure_id.cmi \
     utils/clflags.cmi \
+    lambda/block_desc.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/simple_value_approx.cmi
 middle_end/flambda/simple_value_approx.cmx : \
@@ -6666,6 +6688,7 @@ middle_end/flambda/simple_value_approx.cmx : \
     middle_end/flambda/base_types/closure_origin.cmx \
     middle_end/flambda/base_types/closure_id.cmx \
     utils/clflags.cmx \
+    lambda/block_desc.cmx \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/simple_value_approx.cmi
 middle_end/flambda/simple_value_approx.cmi : \
@@ -6682,7 +6705,8 @@ middle_end/flambda/simple_value_approx.cmi : \
     middle_end/flambda/base_types/export_id.cmi \
     lambda/debuginfo.cmi \
     middle_end/flambda/base_types/closure_origin.cmi \
-    middle_end/flambda/base_types/closure_id.cmi
+    middle_end/flambda/base_types/closure_id.cmi \
+    lambda/block_desc.cmi
 middle_end/flambda/simplify_boxed_integer_ops.cmo : \
     middle_end/flambda/simplify_common.cmi \
     middle_end/flambda/simplify_boxed_integer_ops_intf.cmi \
@@ -7745,6 +7769,7 @@ toplevel/byte/topeval.cmo : \
     file_formats/cmo_format.cmi \
     utils/clflags.cmi \
     bytecomp/bytegen.cmi \
+    lambda/block_desc.cmi \
     toplevel/byte/topeval.cmi
 toplevel/byte/topeval.cmx : \
     utils/warnings.cmx \
@@ -7775,6 +7800,7 @@ toplevel/byte/topeval.cmx : \
     file_formats/cmo_format.cmi \
     utils/clflags.cmx \
     bytecomp/bytegen.cmx \
+    lambda/block_desc.cmx \
     toplevel/byte/topeval.cmi
 toplevel/byte/topeval.cmi : \
     toplevel/topcommon.cmi \
@@ -10942,6 +10968,7 @@ otherlibs/dynlink/byte/dynlink.cmo : \
     otherlibs/dynlink/dynlink_config.cmi \
     otherlibs/dynlink/dynlink_common.cmi \
     otherlibs/dynlink/dynlink_cmo_format.cmi \
+    lambda/block_desc.cmi \
     otherlibs/dynlink/byte/dynlink.cmi
 otherlibs/dynlink/byte/dynlink.cmi :
 otherlibs/dynlink/byte/dynlink_symtable.cmo : \
