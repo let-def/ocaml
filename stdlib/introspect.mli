@@ -175,3 +175,38 @@ module P : sig
   val eprintln : P_list.any -> unit
   val fprintln : out_channel -> P_list.any -> unit
 end
+
+module Json : sig
+  (* Json printing API *)
+
+  val to_buffer
+    :  ?index:Index.t -> ?depth:int -> ?steps:int ref
+    -> Buffer.t -> 'a -> unit
+
+  val to_string
+    :  ?index:Index.t -> ?depth:int -> ?steps:int ref
+    -> 'a -> string
+
+  val to_channel
+    :  ?index:Index.t -> ?depth:int -> ?steps:int ref
+    -> out_channel -> 'a -> unit
+
+  (* Lower-level output functions *)
+
+  val write
+    :  output_substring:(string -> int -> int -> unit)
+    -> output_char:(char -> unit)
+    -> ?index:Index.t -> ?depth:int -> ?steps:int ref -> Dyn.view -> unit
+
+  val view_to_buffer
+    :  ?index:Index.t -> ?depth:int -> ?steps:int ref
+    -> Buffer.t -> Dyn.view -> unit
+
+  val view_to_string
+    :  ?index:Index.t -> ?depth:int -> ?steps:int ref
+    -> Dyn.view -> string
+
+  val view_to_channel
+    :  ?index:Index.t -> ?depth:int -> ?steps:int ref
+    -> out_channel -> Dyn.view -> unit
+end
