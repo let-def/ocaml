@@ -657,3 +657,265 @@ module P = struct
     fprintln stderr xs;
     flush stderr
 end
+
+module Json = struct
+  open Dyn
+
+  let hex = "0123456789abcdef"
+
+  (* ---------- Generic json writer ---------- *)
+
+  let write ~output_substring ~output_char
+        ?index ?(depth = 20) ?(steps = ref max_int) root =
+    let output_string s = output_substring s 0 (String.length s) in
+    let table = H.create 7 in
+
+    (* -- primitives -- *)
+
+    let escaped_byte c =
+      let c = Char.code c in
+      output_string "\\u00";
+      output_char hex.[c lsr 4];
+      output_char hex.[c land 15]
+    in
+
+    (* Valid UTF-8 passes through; invalid bytes become \u00XX (Latin-1),
+       so the output is always valid JSON. *)
+    let json_string s =
+      output_char '"';
+      let len = String.length s in
+      let start = ref 0 and i = ref 0 in
+      let flush () =
+        if !i > !start then output_substring s !start (!i - !start)
+      in
+      let escape str =
+        flush (); output_string str; incr i; start := !i
+      in
+      while !i < len do
+        (* Fast path: skip plain ASCII bytes. *)
+        while
+          !i < len &&
+            (let c = String.unsafe_get s !i in
+             c >= ' ' && c < '\128' && c <> '"' && c <> '\\')
+        do incr i done;
+        (* Slow path: at most one special byte / UTF-8 sequence, then
+           back to the fast path. Safe runs stay pending in [start..i)
+           and are flushed as one slice. *)
+        if !i < len then
+          match String.unsafe_get s !i with
+          | '"' -> escape "\\\""
+          | '\\' -> escape "\\\\"
+          | '\n' -> escape "\\n"
+          | '\r' -> escape "\\r"
+          | '\t' -> escape "\\t"
+          | '\b' -> escape "\\b"
+          | '\012' -> escape "\\f"
+          | '\000' .. '\031' as c ->
+             flush (); escaped_byte c; incr i; start := !i
+          | '\032' .. '\127' -> incr i (* unreachable: fast path *)
+          | c ->
+             let d = String.get_utf_8_uchar s !i in
+             if Uchar.utf_decode_is_valid d then
+               i := !i + Uchar.utf_decode_length d
+             else begin
+                 flush (); escaped_byte c; incr i; start := !i
+               end
+      done;
+      flush ();
+      output_char '"'
+    in
+
+    (* Shortest of %.12g / %.15g / %.17g that round-trips; %g output is
+       valid JSON. JSON has no nan/infinity, so those become strings. *)
+    let json_float f =
+      match classify_float f with
+      | FP_nan -> output_string "\"nan\""
+      | FP_infinite ->
+         output_string (if f < 0.0 then "\"-infinity\"" else "\"infinity\"")
+      | _ ->
+         let s1 = Printf.sprintf "%.12g" f in
+         if f = float_of_string s1 then output_string s1 else
+           let s2 = Printf.sprintf "%.15g" f in
+           if f = float_of_string s2 then output_string s2 else
+             output_string (Printf.sprintf "%.17g" f)
+    in
+
+    (* -- values -- *)
+
+    let rec value depth obj =
+      if depth <= 0 || !steps <= 0 then output_string "\"...\""
+      else begin
+          decr steps;
+          let raw = get_obj obj in
+          let protect = Obj.is_block raw && Obj.tag raw < Obj.no_scan_tag in
+          if not protect then dynval (depth - 1) (view ?index obj)
+          else if H.mem table raw then output_string "\"<cycle>\""
+          else begin
+              H.add table raw ();
+              dynval (depth - 1) (view ?index obj);
+              H.remove table raw
+            end
+        end
+
+    (* {"Name": ...} *)
+    and open_constr name =
+      output_char '{'; json_string name; output_char ':'
+
+    and dynval depth (v : view) =
+      match v with
+      | String s -> json_string s
+      | Float f -> json_float f
+      | Char c -> json_string (String.make 1 c)
+      | Int_or_constant (i, []) -> output_string (string_of_int i)
+      | Int_or_constant (_, keys) ->
+         (* matches a polymorphic-variant hash: print as a constant *)
+         json_string (String.concat "|" keys)
+      | Constant [] -> output_string "\"<invalid constant>\""
+      | Constant ["[]"] -> output_string "[]"
+      | Constant ["()"] -> output_string "null"
+      | Constant ["true"] -> output_string "true"
+      | Constant ["false"] -> output_string "false"
+      | Constant names -> json_string (String.concat "|" names)
+      | Array arr ->
+         output_char '[';
+         for i = 0 to field_count arr - 1 do
+           if i > 0 then output_char ',';
+           value depth (field_get arr i)
+         done;
+         output_char ']'
+      | Tuple { name = "::"; fields } when field_count fields = 2 ->
+         list depth fields
+      | Tuple { name = ""; fields } -> tuple depth fields
+      | Tuple { name; fields } ->
+         open_constr name; payload depth fields; output_char '}'
+      | Record { name = ""; fields } -> record depth fields
+      | Record { name; fields } ->
+         open_constr name; record depth fields; output_char '}'
+      | Extension (name, _uid, fields) when field_count fields = 0 ->
+         json_string name
+      | Extension (name, _uid, fields) ->
+         open_constr name;
+         let n = field_count fields in
+         if n = 1 then value depth (field_get fields 0)
+         else begin
+             output_char '[';
+             for i = 0 to n - 1 do
+               if i > 0 then output_char ',';
+               value depth (field_get fields i)
+             done;
+             output_char ']'
+           end;
+         output_char '}'
+      | Polymorphic_variant (name, p) ->
+         open_constr name; value depth p; output_char '}'
+      | Lazy_forward d -> value depth d
+      | Lazy_unforced -> output_string "\"<lazy>\""
+      | Lazy_forcing -> output_string "\"<lazy (forcing)>\""
+      | Closure -> output_string "\"<closure>\""
+      | Abstract -> output_string "\"<abstract>\""
+      | Custom -> output_string "\"<custom>\""
+      | Unknown -> output_string "\"<unknown>\""
+
+    (* Lone unlabelled argument is inlined:
+       [Some 1] -> {"Some":1}, [Foo (1, 2)] -> {"Foo":[1,2]}. *)
+    and payload depth fields =
+      if field_count fields = 1 && fst (field_get fields 0) = "" then
+        value depth (snd (field_get fields 0))
+      else tuple depth fields
+
+    (* Unlabelled -> array; any labels -> object keyed by label or index. *)
+    and tuple depth fields =
+      let n = field_count fields in
+      let labelled = ref false in
+      for i = 0 to n - 1 do
+        if fst (field_get fields i) <> "" then labelled := true
+      done;
+      if not !labelled then begin
+          output_char '[';
+          for i = 0 to n - 1 do
+            if i > 0 then output_char ',';
+            value depth (snd (field_get fields i))
+          done;
+          output_char ']'
+        end else begin
+          output_char '{';
+          for i = 0 to n - 1 do
+            if i > 0 then output_char ',';
+            let k, v = field_get fields i in
+            json_string (if k = "" then string_of_int i else k);
+            output_char ':';
+            value depth v
+          done;
+          output_char '}'
+        end
+
+    and record depth fields =
+      output_char '{';
+      for i = 0 to field_count fields - 1 do
+        if i > 0 then output_char ',';
+        let k, v = field_get fields i in
+        json_string k;
+        output_char ':';
+        value depth v
+      done;
+      output_char '}'
+
+    (* Tail-recursive spine walk; cons cells stay in the cycle table until
+       the whole list is written. *)
+    and list depth fields =
+      output_char '[';
+      let rec loop fields visited =
+        value depth (snd (field_get fields 0));
+        let cdr = snd (field_get fields 1) in
+        match view ?index cdr with
+        | Constant ["[]"] | Int_or_constant (0, _) -> visited
+        | Tuple { name = "::"; fields } when field_count fields = 2 ->
+           output_char ',';
+           if !steps <= 0 then begin output_string "\"...\""; visited end
+           else begin
+               let raw = get_obj cdr in
+               if H.mem table raw then begin
+                   output_string "\"<cycle>\""; visited
+                 end else begin
+                   H.add table raw ();
+                   loop fields (raw :: visited)
+                 end
+             end
+        | _ ->
+           output_char ',';
+           output_string "\"<malformed list>\"";
+           visited
+      in
+      List.iter (H.remove table) (loop fields []);
+      output_char ']'
+    in
+    dynval (depth - 1) root
+
+  (* ---------- Instances ---------- *)
+
+  let view_to_buffer ?index ?depth ?steps b root =
+    write
+      ~output_substring:(Buffer.add_substring b)
+      ~output_char:(Buffer.add_char b)
+      ?index ?depth ?steps root
+
+  let view_to_string ?index ?depth ?steps root =
+    let b = Buffer.create 256 in
+    view_to_buffer ?index ?depth ?steps b root;
+    Buffer.contents b
+
+  let view_to_channel ?index ?depth ?steps oc root =
+    write
+      ~output_substring:(output_substring oc)
+      ~output_char:(output_char oc)
+      ?index ?depth ?steps root
+
+  let to_buffer ?index ?depth ?steps b root =
+    view_to_buffer ?index ?depth ?steps b (Dyn.view_any ?index root)
+
+  let to_string ?index ?depth ?steps root =
+    view_to_string ?index ?depth ?steps (Dyn.view_any ?index root)
+
+  let to_channel ?index ?depth ?steps oc root =
+    view_to_channel ?index ?depth ?steps oc (Dyn.view_any ?index root)
+end
