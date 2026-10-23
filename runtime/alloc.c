@@ -56,6 +56,35 @@ CAMLexport value caml_alloc (mlsize_t wosize, tag_t tag)
   return result;
 }
 
+CAMLexport value caml_alloc_reserved (mlsize_t wosize, tag_t tag,
+                                      reserved_t reserved)
+{
+  value result;
+
+  CAMLassert (tag < 256);
+  CAMLassert (tag != Infix_tag);
+  if (wosize <= Max_young_wosize){
+    if (wosize == 0){
+      result = Atom (tag);
+    }else{
+      Caml_check_caml_state();
+      caml_domain_state *dom_st = Caml_state;
+      Alloc_small_with_reserved (result, dom_st, wosize, tag,
+                                 Alloc_small_enter_GC, reserved);
+      if (tag < No_scan_tag){
+        for (mlsize_t i = 0; i < wosize; i++) Field (result, i) = Val_unit;
+      }
+    }
+  } else {
+    result = caml_alloc_shr_reserved (wosize, tag, reserved);
+    if (tag < No_scan_tag) {
+      for (mlsize_t i = 0; i < wosize; i++) Field (result, i) = Val_unit;
+    }
+    result = caml_check_urgent_gc (result);
+  }
+  return result;
+}
+
 /* This is used by the native compiler for large block allocations.
    The resulting block can be filled with [caml_modify], or [caml_initialize],
    or direct writes for integer values and code pointers.
@@ -162,6 +191,21 @@ CAMLexport value caml_alloc_small (mlsize_t wosize, tag_t tag)
   CAMLassert (tag < 256);
   CAMLassert (tag != Infix_tag);
   Alloc_small (result, wosize, tag, Alloc_small_enter_GC);
+  return result;
+}
+
+CAMLexport value caml_alloc_small_reserved (mlsize_t wosize, tag_t tag,
+                                            reserved_t reserved)
+{
+  value result;
+
+  CAMLassert (wosize > 0);
+  CAMLassert (wosize <= Max_young_wosize);
+  CAMLassert (tag < 256);
+  CAMLassert (tag != Infix_tag);
+  caml_domain_state *dom_st = Caml_state;
+  Alloc_small_with_reserved (result, dom_st, wosize, tag,
+                             Alloc_small_enter_GC, reserved);
   return result;
 }
 
