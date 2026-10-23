@@ -249,12 +249,12 @@ let simplify_exits lam =
         (* Simplify Obj.with_tag *)
       | Pccall { Primitive.prim_name = "caml_obj_with_tag"; _ },
         [Lconst (Const_int tag);
-         Lprim (Pmakeblock (_, mut, shape, bdesc), fields, loc)] ->
-         Lprim (Pmakeblock(tag, mut, shape, bdesc), fields, loc)
+         Lprim (Pmakeblock (_, mut, shape, _), fields, loc)] ->
+         Lprim (Pmakeblock(tag, mut, shape, Block_desc.empty), fields, loc)
       | Pccall { Primitive.prim_name = "caml_obj_with_tag"; _ },
         [Lconst (Const_int tag);
-         Lconst (Const_block (_, fields, bdesc))] ->
-         Lconst (Const_block (tag, fields, bdesc))
+         Lconst (Const_block (_, fields, _))] ->
+         Lconst (Const_block (tag, fields, Block_desc.empty))
 
       | _ -> Lprim(p, ll, loc)
      end
