@@ -139,5 +139,27 @@ let () =
 
   let module IntMap = Map.Make(Int) in
   test_case "Empty map" IntMap.empty;
-  test_case "Small map" (IntMap.of_list [1, "one"; 2, "two"; 3, "three"])
+  test_case "Small map" (IntMap.of_list [1, "one"; 2, "two"; 3, "three"]);
+
+  (* 14. Float arrays and float records *)
+  test_case "Float array" [| 1.5; 2.5 |];
+  test_case "Float array (non-literal)"
+    (Array.make 3 (Sys.opaque_identity 0.5));
+  let type point = {x: float; y: float} in
+  test_case "Float record" {x = 1.5; y = (Sys.opaque_identity 2.5)};
+  test_case "Nested float record"
+    [Some {x = 1.5; y = Sys.opaque_identity 2.5}];
+  test_case "Constant nested float record" [Some {x = 1.5; y = 2.5}];
+  test_case "Constant float record" {x = 1.5; y = 2.5};
+
+  (* 15. Blocks with tags above last_non_constant_constructor_tag *)
+  test_case "List of strings" ["a"; "bc"];
+  test_case "Tuple of non-arrays" ("s", 1.5, closure_simple, lazy_val);
+
+  (* 16. Duplicated constant blocks (caml_obj_dup) *)
+  test_case "Constant array" [| Some 1; None; Some 3; None; Some 5 |];
+  test_case "Non-constant array"
+    [| Some (Sys.opaque_identity 1); None; Some 3; None; Some 5 |];
+  test_case "Constant array (with strings)"
+    [| ("a", Some 1); ("b", None) |]
 ;;

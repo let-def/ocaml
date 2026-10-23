@@ -109,3 +109,36 @@ TBar/ (99)
 --- Small map ---
 (0, 1, "one", (0, 2, "two", (0, 3, "three", 0, 1), 2), 3)
 
+--- Float array ---
+[|1.5; 2.5|]
+
+--- Float array (non-literal) ---
+[|0.5; 0.5; 0.5|]
+
+--- Float record ---
+[|1.5; 2.5|]
+
+--- Nested float record ---
+(([|1.5; 2.5|]), 0)
+
+--- Constant nested float record ---
+(([|1.5; 2.5|]), 0)
+
+--- Constant float record ---
+[|1.5; 2.5|]
+
+--- List of strings ---
+("a", ("bc", 0))
+
+--- Tuple of non-arrays ---
+("s", 1.5, <closure>, lazy 2)
+
+--- Constant array ---
+((1), 0, (3), 0, (5))
+
+--- Non-constant array ---
+((1), 0, (3), 0, (5))
+
+--- Constant array (with strings) ---
+(("a", (1)), ("b", 0))
+
