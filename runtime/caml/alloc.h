@@ -27,6 +27,7 @@ extern "C" {
    any OCaml callback such as finalizers or signal handlers. */
 
 CAMLextern value caml_alloc (mlsize_t, tag_t);
+CAMLextern value caml_alloc_reserved (mlsize_t, tag_t, reserved_t);
 CAMLextern value caml_alloc_1(tag_t, value);
 CAMLextern value caml_alloc_2(tag_t, value, value);
 CAMLextern value caml_alloc_3(tag_t, value, value, value);
@@ -42,6 +43,7 @@ CAMLextern value caml_alloc_8(tag_t, value, value, value, value,
 CAMLextern value caml_alloc_9(tag_t, value, value, value, value,
                               value, value, value, value, value);
 CAMLextern value caml_alloc_small (mlsize_t, tag_t);
+CAMLextern value caml_alloc_small_reserved (mlsize_t, tag_t, reserved_t);
 CAMLextern value caml_alloc_shr_check_gc (mlsize_t, tag_t);
 CAMLextern value caml_alloc_tuple (mlsize_t);
 CAMLextern value caml_alloc_float_array (mlsize_t len);

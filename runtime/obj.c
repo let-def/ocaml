@@ -162,7 +162,42 @@ CAMLprim value caml_obj_with_tag(value new_tag_v, value arg)
 
 CAMLprim value caml_obj_dup(value arg)
 {
+#if HEADER_RESERVED_BITS == 0
   return caml_obj_with_tag(Val_long(Tag_val(arg)), arg);
+#else
+
+  CAMLparam1 (arg);
+  CAMLlocal1 (res);
+  header_t hd;
+  mlsize_t sz;
+  tag_t tg;
+  reserved_t reserved;
+
+  hd = Hd_val(arg);
+  sz = Wosize_hd(hd);
+  tg = Tag_hd(hd);
+  reserved = Reserved_hd(hd);
+  if (sz == 0) CAMLreturn (Atom(tg));
+  if (tg >= No_scan_tag) {
+    res = caml_alloc_reserved(sz, tg, reserved);
+    memcpy(Bp_val(res), Bp_val(arg), sz * sizeof(value));
+  } else if (sz <= Max_young_wosize) {
+    res = caml_alloc_small_reserved(sz, tg, reserved);
+    for (mlsize_t i = 0; i < sz; i++) Field(res, i) = Field(arg, i);
+  } else {
+    res = caml_alloc_shr_reserved(sz, tg, reserved);
+    /* It is safe to use [caml_initialize] even if [tag == Closure_tag]
+       and some of the "values" being copied are actually code pointers.
+       That's because the new "value" does not point to the minor heap. */
+    for (mlsize_t i = 0; i < sz; i++)
+      caml_initialize(&Field(res, i), Field(arg, i));
+    /* Give gc a chance to run, and run memprof callbacks */
+    caml_process_pending_actions();
+  }
+
+  CAMLreturn (res);
+
+#endif
 }
 
 CAMLprim value caml_obj_add_offset (value v, value offset)
