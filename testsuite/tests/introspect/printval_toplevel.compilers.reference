@@ -123,4 +123,37 @@ Node {l = Empty;
                 h = 2};
       h = 3}
 
+--- Float array ---
+[|1.5; 2.5|]
+
+--- Float array (non-literal) ---
+[|0.5; 0.5; 0.5|]
+
+--- Float record ---
+{x = 1.5; y = 2.5}
+
+--- Nested float record ---
+[Some {x = 1.5; y = 2.5}]
+
+--- Constant nested float record ---
+[Some {x = 1.5; y = 2.5}]
+
+--- Constant float record ---
+{x = 1.5; y = 2.5}
+
+--- List of strings ---
+["a"; "bc"]
+
+--- Tuple of non-arrays ---
+("s", 1.5, <closure>, lazy 2)
+
+--- Constant array ---
+[|Some 1; None; Some 3; None; Some 5|]
+
+--- Non-constant array ---
+[|Some 1; None; Some 3; None; Some 5|]
+
+--- Constant array (with strings) ---
+[|("a", Some 1); ("b", None)|]
+
 
