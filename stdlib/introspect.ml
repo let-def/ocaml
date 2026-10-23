@@ -300,7 +300,8 @@ module Dyn = struct
 
   let find_tag t obj =
     let otag = Obj.tag obj in
-    if otag = Obj.int_tag then None
+    if otag > Obj.last_non_constant_constructor_tag &&
+       otag <> Obj.double_array_tag then None
     else
       let osize = block_size obj in
       let select = function
