@@ -285,25 +285,24 @@ module Dyn = struct
     | Lazy_forcing
     | Lazy_forward of t
 
-  let double_to_wo_shift = match Sys.word_size with
-    | 64 -> 0
-    | _  -> 1
+  let block_size obj =
+    if Obj.tag obj = Obj.double_array_tag
+    then Array.Floatarray.length (Obj.obj obj)
+    else Obj.size obj
 
   let fields_of_block f obj =
-    let count, get =
-      if Obj.tag obj = Obj.double_array_tag then
-        (Obj.size obj lsr double_to_wo_shift,
-         fun i -> f i (Obj.repr (Obj.double_field obj i)))
-      else
-        (Obj.size obj, fun i -> f i (Obj.field obj i))
+    let get =
+      if Obj.tag obj = Obj.double_array_tag
+      then fun i -> f i (Obj.repr (Obj.double_field obj i))
+      else fun i -> f i (Obj.field obj i)
     in
-    {count; get}
+    {count = block_size obj; get}
 
   let find_tag t obj =
     let otag = Obj.tag obj in
     if otag = Obj.int_tag then None
     else
-      let osize = Obj.size obj in
+      let osize = block_size obj in
       let select = function
         | Desc.Array _ ->
             otag <= Obj.last_non_constant_constructor_tag
@@ -312,13 +311,7 @@ module Dyn = struct
         | Desc.Tuple t ->
             otag = t.tag && osize = Array.length t.fields
         | Desc.Record t ->
-            otag = t.tag &&
-            let len = Array.length t.fields in
-            let len =
-              if otag = Obj.double_array_tag
-              then len lsl double_to_wo_shift else len
-            in
-            osize = len
+            otag = t.tag && osize = Array.length t.fields
         | Desc.Polymorphic_variant_constant _ -> false
         | Desc.Unknown -> false
       in
