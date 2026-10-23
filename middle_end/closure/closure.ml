@@ -909,9 +909,9 @@ let rec close ({ backend; fenv; cenv ; mutable_vars } as env) lam =
         | Const_char c -> Uconst_int (Char.code c)
         | Const_block (tag, fields, bdesc) ->
             str (Uconst_block (tag, List.map transl fields, bdesc))
-        | Const_float_array sl ->
+        | Const_float_array (sl, bdesc) ->
             (* constant float arrays are really immutable *)
-            str (Uconst_float_array (List.map float_of_string sl))
+            str (Uconst_float_array (List.map float_of_string sl, bdesc))
         | Const_immstring s ->
             str (Uconst_string s)
         | Const_float x -> str (Uconst_float (float_of_string x))

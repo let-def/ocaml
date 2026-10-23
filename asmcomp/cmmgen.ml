@@ -174,8 +174,8 @@ let emit_structured_constant ((_sym, is_global) as symb) cst cont =
   | Uconst_block (tag, csts, desc) ->
       let cont = List.fold_right emit_constant csts cont in
       emit_block symb (block_header ~desc tag (List.length csts)) cont
-  | Uconst_float_array fields ->
-      emit_float_array_constant symb fields cont
+  | Uconst_float_array (fields, bdesc) ->
+      emit_float_array_constant symb fields bdesc cont
   | Uconst_closure(fundecls, lbl, fv) ->
       Cmmgen_state.add_constant lbl (Const_closure (is_global, fundecls, fv));
       List.iter (fun f -> Cmmgen_state.add_function f) fundecls;

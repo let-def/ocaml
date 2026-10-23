@@ -27,7 +27,7 @@ type ustructured_constant =
   | Uconst_int64 of int64
   | Uconst_nativeint of nativeint
   | Uconst_block of int * uconstant list * block_desc
-  | Uconst_float_array of float list
+  | Uconst_float_array of float list * block_desc
   | Uconst_string of string
   | Uconst_closure of ufunction list * string * uconstant list
 
@@ -197,8 +197,10 @@ let compare_structured_constants c1 c2 =
         let c = compare_constant_lists l1 l2 in
         if c <> 0 then c else
           Block_desc.compare bd1 bd2
-  | Uconst_float_array l1, Uconst_float_array l2 ->
-      compare_float_lists l1 l2
+  | Uconst_float_array (l1, bd1), Uconst_float_array (l2, bd2) ->
+      let c = compare_float_lists l1 l2 in
+      if c <> 0 then c else
+        Block_desc.compare bd1 bd2
   | Uconst_string s1, Uconst_string s2 -> String.compare s1 s2
   | Uconst_closure (_,lbl1,_), Uconst_closure (_,lbl2,_) ->
       String.compare lbl1 lbl2

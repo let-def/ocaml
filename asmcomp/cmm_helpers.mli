@@ -663,8 +663,8 @@ val emit_nativeint_constant :
   (string * Cmmgen_state.is_global) -> nativeint -> data_item list ->
   data_item list
 val emit_float_array_constant :
-  (string * Cmmgen_state.is_global) -> float list -> data_item list ->
-  data_item list
+  (string * Cmmgen_state.is_global) -> float list -> Block_desc.t ->
+  data_item list -> data_item list
 
 val fundecls_size : Clambda.ufunction list -> int
 

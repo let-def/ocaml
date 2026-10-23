@@ -458,7 +458,7 @@ and transl_exp0 ~in_new_scope ~scopes e =
               | Paddrarray | Pintarray ->
                   Lconst(Const_block(0, cl, bdesc))
               | Pfloatarray ->
-                  Lconst(Const_float_array(List.map extract_float cl))
+                  Lconst(Const_float_array(List.map extract_float cl, bdesc))
               | Pgenarray ->
                   raise Not_constant    (* can this really happen? *)
             in
@@ -1063,7 +1063,7 @@ and transl_record ~scopes loc env fields repres opt_init_expr =
         | Record_inlined tag -> Lconst(Const_block(tag, cl, bdesc))
         | Record_unboxed _ -> Lconst(match cl with [v] -> v | _ -> assert false)
         | Record_float ->
-            Lconst(Const_float_array(List.map extract_float cl))
+            Lconst(Const_float_array(List.map extract_float cl, bdesc))
         | Record_extension _ ->
             raise Not_constant
       with Not_constant ->
