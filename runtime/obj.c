@@ -362,10 +362,10 @@ CAMLprim value caml_alloc_dummy_lazy (value unit)
   return caml_alloc(1, 0);
 }
 
+#if HEADER_RESERVED_BITS > 0
 // unsafe as in Unsafe_store_tag_val.
 static void unsafe_store_reserved_bits(value obj, reserved_t res)
 {
-#if HEADER_RESERVED_BITS > 0
   header_t old_hd = Hd_val(obj);
   header_t tag = Hd_reserved(res);
   header_t mask = Hd_reserved(1) - 1;
@@ -382,8 +382,8 @@ static void unsafe_store_reserved_bits(value obj, reserved_t res)
             new_hd, memory_order_relaxed, memory_order_relaxed))
       break; // Success! Value committed.
   }
-#endif
 }
+#endif
 
 CAMLprim value caml_update_dummy(value dummy, value newval)
 {
@@ -410,6 +410,8 @@ CAMLprim value caml_update_dummy(value dummy, value newval)
   res = Reserved_val(newval);
   if (res)
     unsafe_store_reserved_bits(dummy, res);
+#else
+  (void)res;
 #endif
 
   if (tag == Double_array_tag){
