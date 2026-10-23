@@ -44,12 +44,12 @@ let rec structured_constant ppf = function
       fprintf ppf "block(%i" tag;
       List.iter (fun u -> fprintf ppf ",%a" uconstant u) l;
       fprintf ppf ",%a)" Block_desc.format bd
-  | Uconst_float_array [] ->
-      fprintf ppf "floatarray()"
-  | Uconst_float_array (f1 :: fl) ->
-      fprintf ppf "floatarray(%F" f1;
+  | Uconst_float_array ([], bd) ->
+      fprintf ppf "floatarray([],%a)" Block_desc.format bd
+  | Uconst_float_array (f1 :: fl, bd) ->
+      fprintf ppf "floatarray([%F" f1;
       List.iter (fun f -> fprintf ppf ",%F" f) fl;
-      fprintf ppf ")"
+      fprintf ppf "],%a)" Block_desc.format bd
   | Uconst_string s -> fprintf ppf "%S" s
   | Uconst_closure(clos, sym, fv) ->
       let funs ppf =

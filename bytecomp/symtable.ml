@@ -221,8 +221,11 @@ let rec transl_const = function
       in
       List.iteri transl_field fields;
       block
-  | Const_float_array fields ->
+  | Const_float_array (fields, bdesc) ->
       let res = Array.Floatarray.create (List.length fields) in
+      if Sys.introspection_enabled then
+        ignore (Obj.set_reserved (Obj.repr res) (Block_desc.index bdesc)
+                : bool);
       List.iteri (fun i f -> Array.Floatarray.set res i (float_of_string f))
         fields;
       Obj.repr res

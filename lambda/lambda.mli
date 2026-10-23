@@ -223,7 +223,7 @@ type structured_constant =
   | Const_int64 of int64
   | Const_nativeint of nativeint
   | Const_block of int * structured_constant list * block_desc
-  | Const_float_array of string list
+  | Const_float_array of string list * block_desc
   | Const_immstring of string
 
 type tailcall_attribute =

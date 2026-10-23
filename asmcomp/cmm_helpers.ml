@@ -2604,8 +2604,8 @@ let emit_nativeint_constant symb n cont =
   emit_block symb boxedintnat_header
     (emit_boxed_nativeint_constant_fields n cont)
 
-let emit_float_array_constant symb fields cont =
-  emit_block symb (floatarray_header (List.length fields))
+let emit_float_array_constant symb fields desc cont =
+  emit_block symb (floatarray_header ~desc (List.length fields))
     (Misc.map_end (fun f -> Cdouble f) fields cont)
 
 (* Generate the entry point *)

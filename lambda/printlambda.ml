@@ -34,9 +34,9 @@ let rec struct_const ppf = function
       let sconsts ppf scl =
         List.iter (fun sc -> fprintf ppf "@ %a" struct_const sc) scl in
       fprintf ppf "@[<1>[%i:@ @[%a%a@]]@]" tag struct_const sc1 sconsts scl
-  | Const_float_array [] ->
+  | Const_float_array ([], _) ->
       fprintf ppf "[| |]"
-  | Const_float_array (f1 :: fl) ->
+  | Const_float_array (f1 :: fl, _) ->
       let floats ppf fl =
         List.iter (fun f -> fprintf ppf "@ %s" f) fl in
       fprintf ppf "@[<1>[|@[%s%a@]|]@]" f1 floats fl

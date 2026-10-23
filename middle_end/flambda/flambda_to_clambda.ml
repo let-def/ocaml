@@ -208,7 +208,9 @@ let to_clambda_allocated_constant (const : Allocated_const.t)
   | Int64 i -> Uconst_int64 i
   | Nativeint i -> Uconst_nativeint i
   | Immutable_string s | String s -> Uconst_string s
-  | Immutable_float_array a | Float_array a -> Uconst_float_array a
+  | Immutable_float_array a | Float_array a ->
+      (*FIXME: introcaml flambda support*)
+      Uconst_float_array (a, Block_desc.empty)
 
 let to_uconst_symbol env symbol : Clambda.ustructured_constant option =
   match Env.allocated_const_for_symbol env symbol with
