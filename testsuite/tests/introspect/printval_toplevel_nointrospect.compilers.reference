@@ -131,7 +131,7 @@ TBar/ (99)
 ("a", ("bc", 0))
 
 --- Tuple of non-arrays ---
-("s", 1.5, <closure>, lazy 2)
+("s", 1.5, <closure>, 2)
 
 --- Constant array ---
 ((1), 0, (3), 0, (5))

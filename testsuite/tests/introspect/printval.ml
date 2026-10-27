@@ -154,6 +154,8 @@ let () =
 
   (* 15. Blocks with tags above last_non_constant_constructor_tag *)
   test_case "List of strings" ["a"; "bc"];
+  (* The GC short-circuits forced lazy values: make it deterministic *)
+  Gc.minor ();
   test_case "Tuple of non-arrays" ("s", 1.5, closure_simple, lazy_val);
 
   (* 16. Duplicated constant blocks (caml_obj_dup) *)

@@ -2646,6 +2646,7 @@ bytecomp/printinstr.cmo : \
     lambda/lambda.cmi \
     bytecomp/instruct.cmi \
     typing/ident.cmi \
+    lambda/block_desc.cmi \
     bytecomp/printinstr.cmi
 bytecomp/printinstr.cmx : \
     lambda/printlambda.cmx \
@@ -2653,6 +2654,7 @@ bytecomp/printinstr.cmx : \
     lambda/lambda.cmx \
     bytecomp/instruct.cmx \
     typing/ident.cmx \
+    lambda/block_desc.cmx \
     bytecomp/printinstr.cmi
 bytecomp/printinstr.cmi : \
     bytecomp/instruct.cmi
@@ -3027,6 +3029,7 @@ asmcomp/cmm_helpers.cmo : \
     utils/clflags.cmi \
     middle_end/clambda_primitives.cmi \
     middle_end/clambda.cmi \
+    lambda/block_desc.cmi \
     middle_end/backend_var.cmi \
     parsing/asttypes.cmi \
     asmcomp/arch.cmi \
@@ -3049,6 +3052,7 @@ asmcomp/cmm_helpers.cmx : \
     utils/clflags.cmx \
     middle_end/clambda_primitives.cmx \
     middle_end/clambda.cmx \
+    lambda/block_desc.cmx \
     middle_end/backend_var.cmx \
     parsing/asttypes.cmx \
     asmcomp/arch.cmx \
@@ -4499,9 +4503,11 @@ middle_end/variable.cmi : \
     middle_end/compilation_unit.cmi
 lambda/block_desc.cmo : \
     utils/config.cmi \
+    utils/clflags.cmi \
     lambda/block_desc.cmi
 lambda/block_desc.cmx : \
     utils/config.cmx \
+    utils/clflags.cmx \
     lambda/block_desc.cmi
 lambda/block_desc.cmi :
 lambda/debuginfo.cmo : \
@@ -4656,6 +4662,7 @@ lambda/simplif.cmo : \
     typing/ident.cmi \
     lambda/debuginfo.cmi \
     utils/clflags.cmi \
+    lambda/block_desc.cmi \
     parsing/asttypes.cmi \
     lambda/simplif.cmi
 lambda/simplif.cmx : \
@@ -4667,6 +4674,7 @@ lambda/simplif.cmx : \
     typing/ident.cmx \
     lambda/debuginfo.cmx \
     utils/clflags.cmx \
+    lambda/block_desc.cmx \
     parsing/asttypes.cmx \
     lambda/simplif.cmi
 lambda/simplif.cmi : \
@@ -5818,6 +5826,7 @@ middle_end/flambda/flambda_to_clambda.cmo : \
     middle_end/flambda/base_types/closure_id.cmi \
     utils/clflags.cmi \
     middle_end/clambda.cmi \
+    lambda/block_desc.cmi \
     middle_end/backend_var.cmi \
     middle_end/flambda/allocated_const.cmi \
     middle_end/flambda/flambda_to_clambda.cmi
@@ -5848,6 +5857,7 @@ middle_end/flambda/flambda_to_clambda.cmx : \
     middle_end/flambda/base_types/closure_id.cmx \
     utils/clflags.cmx \
     middle_end/clambda.cmx \
+    lambda/block_desc.cmx \
     middle_end/backend_var.cmx \
     middle_end/flambda/allocated_const.cmx \
     middle_end/flambda/flambda_to_clambda.cmi
@@ -7157,6 +7167,7 @@ driver/compile_common.cmo : \
     driver/compmisc.cmi \
     utils/clflags.cmi \
     parsing/builtin_attributes.cmi \
+    lambda/block_desc.cmi \
     driver/compile_common.cmi
 driver/compile_common.cmx : \
     utils/warnings.cmx \
@@ -7177,6 +7188,7 @@ driver/compile_common.cmx : \
     driver/compmisc.cmx \
     utils/clflags.cmx \
     parsing/builtin_attributes.cmx \
+    lambda/block_desc.cmx \
     driver/compile_common.cmi
 driver/compile_common.cmi : \
     parsing/unit_info.cmi \
@@ -7196,7 +7208,6 @@ driver/compmisc.cmo : \
     utils/config.cmi \
     driver/compenv.cmi \
     utils/clflags.cmi \
-    lambda/block_desc.cmi \
     driver/compmisc.cmi
 driver/compmisc.cmx : \
     utils/warnings.cmx \
@@ -7210,7 +7221,6 @@ driver/compmisc.cmx : \
     utils/config.cmx \
     driver/compenv.cmx \
     utils/clflags.cmx \
-    lambda/block_desc.cmx \
     driver/compmisc.cmi
 driver/compmisc.cmi : \
     utils/load_path.cmi \

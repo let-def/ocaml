@@ -1,4 +1,6 @@
 (* TEST
+ (* The opaque printer shows more with introspection *)
+ no-introspect;
  expect;
 *)
 

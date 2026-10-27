@@ -134,7 +134,9 @@ module MakeEvalPrinter (E: EVAL_BASE) = struct
       let same_value v1 v2 = (v1 == v2)
     end)
 
+  (* Without introspection, opaque values are printed as upstream does *)
   let opaque_printer ?max_printer_depth ?printer_steps kind obj =
+    if not Sys.introspection_enabled then None else
     match Genprintval.obj_printer ?max_printer_depth ?printer_steps kind obj with
     | None -> None
     | Some out ->

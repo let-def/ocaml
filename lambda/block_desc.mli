@@ -8,6 +8,12 @@ val dump : (string -> unit) -> t -> unit
 val compare : t -> t -> int
 val format : Format.formatter -> t -> unit
 
+(* Print a descriptor in intermediate representations: nothing unless
+   [-dblock-desc] is set, in which case the descriptor is printed after
+   [sep] (a space for [format_dumped]). *)
+val format_dumped : Format.formatter -> t -> unit
+val format_dumped_sep : string -> Format.formatter -> t -> unit
+
 (* Index of a descriptor in the reserved header bits of the target
    configuration (0 if introspection is disabled). *)
 val index : t -> int

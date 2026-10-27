@@ -689,6 +689,10 @@ let mk_dsource f =
 let mk_dlambda f =
   "-dlambda", Arg.Unit f, " (undocumented)"
 
+let mk_dblock_desc f =
+  "-dblock-desc", Arg.Unit f,
+  " Show block descriptors in intermediate representations"
+
 let mk_drawclambda f =
   "-drawclambda", Arg.Unit f, " (undocumented)"
 
@@ -878,6 +882,7 @@ module type Core_options = sig
   val _dmatchcomp : unit -> unit
   val _drawlambda : unit -> unit
   val _dlambda : unit -> unit
+  val _dblock_desc : unit -> unit
 
 end
 
@@ -1197,6 +1202,7 @@ struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_dblock_desc F._dblock_desc;
     mk_dinstr F._dinstr;
     mk_dcamlprimc F._dcamlprimc;
     mk_dtimings F._dtimings;
@@ -1277,6 +1283,7 @@ struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_dblock_desc F._dblock_desc;
     mk_dinstr F._dinstr;
 
     mk_args F._args;
@@ -1423,6 +1430,7 @@ struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_dblock_desc F._dblock_desc;
     mk_drawclambda F._drawclambda;
     mk_dclambda F._dclambda;
     mk_dcmm_invariants F._dcmm_invariants;
@@ -1544,6 +1552,7 @@ module Make_opttop_options (F : Opttop_options) = struct
     mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
+    mk_dblock_desc F._dblock_desc;
     mk_drawclambda F._drawclambda;
     mk_dclambda F._dclambda;
     mk_dcmm_invariants F._dcmm_invariants;
@@ -1711,6 +1720,7 @@ module Default = struct
     let _H dir = hidden_include_dirs := dir :: (!hidden_include_dirs)
     let _color = Misc.set_or_ignore color_reader.parse color
     let _dlambda = set dump_lambda
+    let _dblock_desc = set dump_block_desc
     let _dparsetree = set dump_parsetree
     let _dparsetree_loc_ghost_invariants = set parsetree_ghost_loc_invariant
     let _drawlambda = set dump_rawlambda

@@ -16,4 +16,7 @@
    }
 *)
 
+(* printval.ml uses Gc: make sure it is linked in the main program *)
+let () = ignore (Gc.minor : unit -> unit)
+
 let () = Dynlink.loadfile (if Dynlink.is_native then "printval.cmxs" else "printval.cmo")

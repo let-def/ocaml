@@ -90,7 +90,9 @@ let get_descriptors () =
       descriptors := Some (result, index);
       index
 
+(* Without introspection, opaque values are printed as upstream does *)
 let opaque_printer ?max_printer_depth ?printer_steps kind obj =
+  if not Sys.introspection_enabled then None else
   match Debugcom.Remote_value.obj obj with
   | Result.Error msg ->
       Some (Outcometree.Oval_stuff (msg, None))

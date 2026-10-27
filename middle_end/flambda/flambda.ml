@@ -438,7 +438,8 @@ let print_constant_defining_value ppf (const : constant_defining_value) =
   | Allocated_const const ->
     fprintf ppf "(Allocated_const %a)" Allocated_const.print const
   | Block (tag, [], desc) ->
-    fprintf ppf "(Atom (tag %d) %a)" (Tag.to_int tag) Block_desc.format desc
+    fprintf ppf "(Atom (tag %d)%a)" (Tag.to_int tag)
+      Block_desc.format_dumped desc
   | Block (tag, fields, desc) ->
     let print_field ppf (field : constant_defining_value_block_field) =
       match field with
@@ -448,9 +449,9 @@ let print_constant_defining_value ppf (const : constant_defining_value) =
     let print_fields ppf =
       List.iter (fprintf ppf "@ %a" print_field)
     in
-    fprintf ppf "(Block (tag %d, %a, %a))" (Tag.to_int tag)
+    fprintf ppf "(Block (tag %d, %a%a))" (Tag.to_int tag)
       print_fields fields
-      Block_desc.format desc
+      (Block_desc.format_dumped_sep ", ") desc
   | Set_of_closures set_of_closures ->
     fprintf ppf "@[<2>(Set_of_closures (@ %a))@]" print_set_of_closures
       set_of_closures
@@ -484,11 +485,11 @@ let rec print_program_body ppf (program : program_body) =
       (Format.pp_print_list symbol_binding) defs;
     print_program_body ppf program
   | Initialize_symbol (symbol, tag, fields, desc, program) ->
-    fprintf ppf "@[<2>initialize_symbol@ (@[<2>%a@ %a@ %a@ %a@])@]@."
+    fprintf ppf "@[<2>initialize_symbol@ (@[<2>%a@ %a@ %a%a@])@]@."
       Symbol.print symbol
       Tag.print tag
       (Format.pp_print_list lam) fields
-      Block_desc.format desc;
+      Block_desc.format_dumped desc;
     print_program_body ppf program
   | Effect (expr, program) ->
     fprintf ppf "@[<2>effect@ %a@]@."

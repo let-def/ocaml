@@ -13,6 +13,11 @@ let compare = Desc.compare
 let format ppf t =
   dump (Format.pp_print_string ppf) t
 
+let format_dumped_sep sep ppf t =
+  if !Clflags.dump_block_desc then Format.fprintf ppf "%s%a" sep format t
+
+let format_dumped ppf t = format_dumped_sep " " ppf t
+
 let index t =
   if Sys.introspection_enabled then
     Desc.index ~bits:Config.reserved_header_bits t

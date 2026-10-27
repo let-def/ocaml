@@ -145,7 +145,7 @@ Node {l = Empty;
 ["a"; "bc"]
 
 --- Tuple of non-arrays ---
-("s", 1.5, <closure>, lazy 2)
+("s", 1.5, <closure>, 2)
 
 --- Constant array ---
 [|Some 1; None; Some 3; None; Some 5|]
