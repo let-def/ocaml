@@ -56,8 +56,17 @@ type extern_flags =
     No_sharing                      (** Don't preserve sharing *)
   | Closures                        (** Send function closures *)
   | Compat_32                       (** Ensure 32-bit compatibility *)
-  | Compress_if_possible            (** Optional compression *)
-  | Reserved_bits                   (** Preserve reserved header bits *)
+  | Compress_if_possible
+    (** Compress the output if the runtime supports it.
+        Data produced with this flag cannot be read by runtimes
+        without compression support.
+        This flag was previously internal to the compiler; it has to be
+        exposed because [Reserved_bits] comes after it. *)
+  | Reserved_bits
+    (** Preserve the reserved header bits of blocks (used by
+        {!Introspect} for block descriptors).
+        Data produced with this flag cannot be read by runtimes that
+        do not know about reserved header bits. *)
 
 (** The flags to the [Marshal.to_*] functions below. *)
 

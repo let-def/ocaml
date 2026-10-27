@@ -96,16 +96,6 @@ module Desc = struct
     dump (Buffer.add_string buf) t;
     Buffer.contents buf
 
-  let hash_combine seed v = Hashtbl.seeded_hash_param 10 100 seed v
-
-  let hash_array h arr =
-    (* Avoid dependency on Array *)
-    let h = ref h in
-    for i = 0 to Array.length arr - 1 do
-      h := hash_combine !h arr.(i)
-    done;
-    !h
-
   let hash_variant s =
     let accu = ref 0 in
     for i = 0 to String.length s - 1 do
@@ -116,41 +106,64 @@ module Desc = struct
     (* make it signed for 64 bits architectures *)
     if !accu > 0x3FFFFFFF then !accu - (1 lsl 31) else !accu
 
+  (* The whole descriptor is hashed, through its canonical textual
+     representation.  [Hashtbl.hash] hashes all the bytes of a string and
+     returns the same 30-bit non-negative integer on all platforms (native,
+     bytecode on 32-bit and 64-bit hosts, js_of_ocaml), which matters because
+     hashes computed by the compiler are compared with headers read at
+     runtime. *)
+  let hash_bits = 30
+
   let hash = function
     | Unknown -> 0
-    | Array approx ->
-        hash_combine 2 approx
-    | Tuple { name; tag; fields } ->
-        hash_combine (hash_combine (hash_combine 5 tag) name) fields
-    | Record { name; tag; fields } ->
-        hash_array (hash_combine (hash_combine 6 tag) name) fields
-    | Polymorphic_variant -> 7
-    | Polymorphic_variant_constant _ -> 8
+    | d ->
+        (* 0 is reserved for [Unknown] *)
+        let h = Hashtbl.hash (to_string d) in
+        if h = 0 then 1 else h
 
-  external read_self_descriptors : unit -> t list =
+  (* The index of a descriptor in a configuration with [bits] reserved header
+     bits.  0 is reserved for "no descriptor". *)
+  let index_of_hash ~bits h =
+    if bits <= 0 || h = 0 then 0
+    else
+      let i = h land ((1 lsl (min bits hash_bits)) - 1) in
+      if i = 0 then 1 else i
+
+  let index ~bits d = index_of_hash ~bits (hash d)
+
+  type entry = int * t
+
+  let entry d = (hash d, d)
+
+  external read_self_descriptors : unit -> entry list =
     "caml_read_bdsc_section"
 
-  external compiler_descriptors : unit -> t list ref =
+  external compiler_descriptors : unit -> entry list ref =
     "caml_compiler_block_descs"
 end
 
 module Index = struct
-  let reserved_mask = (1 lsl Obj.reserved_bits ()) - 1
-  let descriptor_index x = reserved_mask land (Desc.hash x)
+  let reserved_bits = Obj.reserved_bits ()
 
   type t = {
+    lock : Mutex.t;
     descriptors : (int, Desc.t list) Hashtbl.t;
     known_variants: (string, unit) Hashtbl.t;
     variants : (int, string list) Hashtbl.t;
   }
 
   let raw_make () : t = {
+    lock = Mutex.create ();
     descriptors = Hashtbl.create 17;
     known_variants = Hashtbl.create 17;
     variants = Hashtbl.create 17;
   }
 
-  let register (t : t) = function
+  (* Must be called with [t.lock] held.
+     [h] is the hash computed by the compiler, it is never recomputed: this
+     way the runtime agrees with the code that allocated the blocks. *)
+  let register_unlocked (t : t) ((h, desc) : Desc.entry) =
+    match desc with
     | Desc.Polymorphic_variant_constant name ->
         if not (Hashtbl.mem t.known_variants name) then begin
           Hashtbl.add t.known_variants name ();
@@ -160,87 +173,99 @@ module Index = struct
           | names -> Hashtbl.replace t.variants i (name :: names)
         end
     | tag ->
-        let i = descriptor_index tag in
+        let i = Desc.index_of_hash ~bits:reserved_bits h in
         begin match Hashtbl.find t.descriptors i with
         | exception Not_found -> Hashtbl.add t.descriptors i [tag]
-        | tags -> Hashtbl.replace t.descriptors i (tag :: tags)
+        | tags ->
+            if not (List.exists (Desc.equal tag) tags) then
+              Hashtbl.replace t.descriptors i (tag :: tags)
         end
 
+  let register_list_unlocked t tags =
+    if enabled then List.iter (register_unlocked t) tags
+
   let register t desc =
-    if enabled then register t desc
+    if enabled then Mutex.protect t.lock (fun () -> register_unlocked t desc)
+
+  let register_list t tags =
+    if enabled then
+      Mutex.protect t.lock (fun () -> register_list_unlocked t tags)
 
   let make () =
     let result = raw_make () in
-    register result Desc.unknown;
-    register result Desc.simple_ref;
+    register_list result [Desc.entry Desc.unknown; Desc.entry Desc.simple_ref];
     result
 
-  let register_list t tags =
-    List.iter (register t) tags
-
   let lookup (t : t) i =
-    try Hashtbl.find t.descriptors i
-    with Not_found -> []
+    Mutex.protect t.lock (fun () ->
+        try Hashtbl.find t.descriptors i
+        with Not_found -> [])
 
   let lookup_by_reserved_bits t o =
     lookup t (Obj.get_reserved o)
 
   let lookup_variant (t : t) i =
-    try Hashtbl.find t.variants i
-    with Not_found -> []
+    Mutex.protect t.lock (fun () ->
+        try Hashtbl.find t.variants i
+        with Not_found -> [])
 
-  let self_descriptors = ref []
+  (* State of the index of the current process, protected by [self_lock] *)
 
-  let update_descriptors index descriptors =
-    match !self_descriptors with
-    | last_descriptors when descriptors != last_descriptors ->
-      self_descriptors := descriptors;
-      let rec aux = function
-        | descriptors when descriptors == last_descriptors -> ()
-        | [] -> ()
-        | x :: xs ->
-            register index x;
-            aux xs
-      in
-      aux descriptors
-    | _ -> ()
+  let self_lock = Mutex.create ()
 
-  let self_index = lazy (
-    let descriptors = Desc.read_self_descriptors () in
-    let result = make () in
-    update_descriptors result descriptors;
-    result
-  )
+  let self_index_state = ref None
 
-  let self_libraries = ref []
-
-  let update_libraries index libraries =
-    match !self_libraries with
-    | last_libraries when libraries != last_libraries ->
-      self_libraries := libraries;
-      let rec aux = function
-        | libraries when libraries == last_libraries -> ()
-        | [] -> ()
-        | library :: libraries ->
-            register_list index library;
-            aux libraries
-      in
-      aux libraries
-    | _ -> ()
+  (* Last value of [!(Desc.compiler_descriptors ())] that was registered.
+     New descriptors are consed in front of the list, so we only register the
+     prefix that differs from the previous value. *)
+  let last_compiler_descriptors = ref []
 
   let dynamic_libraries = ref []
 
+  (* Last value of [!dynamic_libraries] that was registered. *)
+  let last_dynamic_libraries = ref []
+
+  let register_new_prefix index ~last current register =
+    if current != !last then begin
+      let rec aux l =
+        if l != !last then
+          match l with
+          | [] -> ()
+          | x :: xs -> register index x; aux xs
+      in
+      aux current;
+      last := current
+    end
+
   let self_index () =
-    let lazy index = self_index in
-    update_descriptors index !(Desc.compiler_descriptors ());
-    update_libraries index !dynamic_libraries;
-    index
+    Mutex.protect self_lock (fun () ->
+        let index = match !self_index_state with
+          | Some index -> index
+          | None ->
+              let index = make () in
+              register_list index (Desc.read_self_descriptors ());
+              self_index_state := Some index;
+              index
+        in
+        register_new_prefix index
+          ~last:last_compiler_descriptors
+          !(Desc.compiler_descriptors ())
+          register;
+        register_new_prefix index
+          ~last:last_dynamic_libraries
+          !dynamic_libraries
+          register_list;
+        index
+      )
 
   let add_dynamic_library = function
     | [] -> ()
-    | library -> dynamic_libraries := library :: !dynamic_libraries
+    | library ->
+        Mutex.protect self_lock (fun () ->
+            dynamic_libraries := library :: !dynamic_libraries)
 
-  let dynamic_libraries () = !dynamic_libraries
+  let dynamic_libraries () =
+    Mutex.protect self_lock (fun () -> !dynamic_libraries)
 end
 
 module Dyn = struct
@@ -298,6 +323,37 @@ module Dyn = struct
     in
     {count = block_size obj; get}
 
+  (* Can [v] be a value approximated by [approx]? *)
+  let approx_compatible (approx : Desc.approx) v =
+    match approx with
+    | Desc.Any -> true
+    | Desc.Int -> Obj.is_int v
+    | Desc.Char ->
+        Obj.is_int v && (let c : int = Obj.obj v in c >= 0 && c < 256)
+    | Desc.Constants names ->
+        Obj.is_block v ||
+        (let c : int = Obj.obj v in c >= 0 && c < Array.length names)
+    | Desc.Polymorphic_variants ->
+        Obj.is_int v || (Obj.tag v = 0 && Obj.size v = 2)
+
+  (* Check the fields of [obj] against a descriptor. Only used to
+     disambiguate between candidates, so a bounded number of array elements
+     is checked. *)
+  let fields_compatible obj (desc : Desc.t) =
+    let check_fields n approx =
+      let rec loop i = i >= n || (approx i (Obj.field obj i) && loop (i + 1)) in
+      Obj.tag obj = Obj.double_array_tag (* fields are floats *) || loop 0
+    in
+    match desc with
+    | Desc.Array approx ->
+        check_fields (min 32 (Obj.size obj))
+          (fun _ v -> approx_compatible approx v)
+    | Desc.Tuple {fields; _} | Desc.Record {fields; _} ->
+        check_fields (Array.length fields)
+          (fun i v -> approx_compatible (snd fields.(i)) v)
+    | Desc.Polymorphic_variant
+    | Desc.Polymorphic_variant_constant _ | Desc.Unknown -> true
+
   let find_tag t obj =
     let otag = Obj.tag obj in
     if otag > Obj.last_non_constant_constructor_tag &&
@@ -306,9 +362,9 @@ module Dyn = struct
       let osize = block_size obj in
       let select = function
         | Desc.Array _ ->
-            otag <= Obj.last_non_constant_constructor_tag
-            || otag = Obj.double_array_tag
-        | Desc.Polymorphic_variant -> osize = 2
+            otag = 0 || otag = Obj.double_array_tag
+        | Desc.Polymorphic_variant ->
+            otag = 0 && osize = 2 && Obj.is_int (Obj.field obj 0)
         | Desc.Tuple t ->
             otag = t.tag && osize = Array.length t.fields
         | Desc.Record t ->
@@ -316,7 +372,22 @@ module Dyn = struct
         | Desc.Polymorphic_variant_constant _ -> false
         | Desc.Unknown -> false
       in
-      List.find_opt select (Index.lookup_by_reserved_bits t obj)
+      let unique = function
+        | [] -> None
+        | d :: ds -> if List.for_all (Desc.equal d) ds then Some d else None
+      in
+      (* Different descriptors can share the same index (hash collisions).
+         If several of them are compatible with the tag and size of [obj],
+         try to discriminate using the contents of the fields.  If this is
+         still ambiguous, fall back to raw printing rather than printing
+         with wrong names. *)
+      match List.filter select (Index.lookup_by_reserved_bits t obj) with
+      | [] -> None
+      | [d] -> Some d
+      | candidates ->
+          match unique candidates with
+          | Some _ as result -> result
+          | None -> unique (List.filter (fields_compatible obj) candidates)
 
   let no_approx (_ : int) (obj : Obj.t) = (Desc.Any, obj)
 
@@ -356,7 +427,7 @@ module Dyn = struct
         Float (Obj.obj obj)
       else if tag = Obj.double_array_tag then
         Array (fields_of_block no_approx obj)
-      else if tag = Obj.closure_tag then
+      else if tag = Obj.closure_tag || tag = Obj.infix_tag then
         Closure
       else if tag = Obj.abstract_tag then
         Abstract
@@ -427,12 +498,22 @@ module Dyn = struct
   module H = Hashtbl.Make(struct type t = Obj.t let equal = (==) let hash = Hashtbl.hash end)
   open Format
 
-  let pp_fields f sep ppf fields =
-    for i = 0 to field_count fields - 1 do
-      let value = field_get fields i in
-      if i > 0 then fprintf ppf "%s@ " sep;
-      fprintf ppf "@[%a@]" f value
-    done
+  (* Print the fields, stopping with "..." once the step budget is exhausted
+     (each printed field consumes steps). *)
+  let pp_fields steps f sep ppf fields =
+    let n = field_count fields in
+    let rec loop i =
+      if i < n then begin
+        if i > 0 then fprintf ppf "%s@ " sep;
+        if i > 0 && !steps <= 0 then
+          pp_print_string ppf "..."
+        else begin
+          fprintf ppf "@[%a@]" f (field_get fields i);
+          loop (i + 1)
+        end
+      end
+    in
+    loop 0
 
   let pp_tuple_field f ppf = function
     | ("", v) -> fprintf ppf "@[%a@]" f v
@@ -441,26 +522,36 @@ module Dyn = struct
   let pp_record_field f ppf (k, v) =
     fprintf ppf "@[%s = %a@]" k f v
 
-  let rec pp_list_elements table f ppf fields =
-    begin match field_get fields 0 with
-    | "", car -> fprintf ppf "@[%a@]" f car;
-    | lbl, car -> fprintf ppf "~%s:@[%a@]" lbl f car;
-    end;
-    let _lbl, cdr = field_get fields 1 in
-    match view cdr with
-    | Constant ["[]"]
-    | Int_or_constant (0, _) -> ()
-    | Tuple {name = "::"; fields} when field_count fields = 2 ->
-        fprintf ppf ";@ ";
-        let raw = get_obj cdr in
-        if H.mem table raw then
-          fprintf ppf "<cycle>"
-        else (
-          H.add table raw ();
-          pp_list_elements table f ppf fields;
-          H.remove table raw
-        )
-    | _ -> fprintf ppf "<malformed list>"
+  (* Iterative walk of the spine: cons cells stay in the cycle table until the
+     whole list is printed. *)
+  let pp_list_elements table index steps f ppf fields =
+    let rec loop fields visited =
+      begin match field_get fields 0 with
+      | "", car -> fprintf ppf "@[%a@]" f car;
+      | lbl, car -> fprintf ppf "~%s:@[%a@]" lbl f car;
+      end;
+      let _lbl, cdr = field_get fields 1 in
+      match view ~index cdr with
+      | Constant ["[]"]
+      | Int_or_constant (0, _) -> visited
+      | Tuple {name = "::"; fields} when field_count fields = 2 ->
+          fprintf ppf ";@ ";
+          if !steps <= 0 then begin
+            pp_print_string ppf "...";
+            visited
+          end else begin
+            let raw = get_obj cdr in
+            if H.mem table raw then begin
+              fprintf ppf "<cycle>";
+              visited
+            end else begin
+              H.add table raw ();
+              loop fields (raw :: visited)
+            end
+          end
+      | _ -> fprintf ppf "<malformed list>"; visited
+    in
+    List.iter (H.remove table) (loop fields [])
 
   let lpar ppf cond =
     if cond then fprintf ppf "(@[<hv>"
@@ -495,7 +586,7 @@ module Dyn = struct
         in
         valid_float_lexeme float_val
 
-  let pp_dynval table self fragile ppf : view -> _ = function
+  let pp_dynval table index steps self fragile ppf : view -> _ = function
     | String s ->
         fprintf ppf "%S" s
     | Float f ->
@@ -520,30 +611,34 @@ module Dyn = struct
           (fun ppf -> List.iter (fprintf ppf " or %s")) names
           rpar fragile
     | Array arr ->
-        fprintf ppf "[|@[<hv>%a@]|]" (pp_fields (self false) ";") arr
+        fprintf ppf "[|@[<hv>%a@]|]" (pp_fields steps (self false) ";") arr
     | Tuple { name ="::"; fields } when field_count fields = 2 ->
-        fprintf ppf "[@[<hv>%a@]]" (pp_list_elements table (self false)) fields
+        fprintf ppf "[@[<hv>%a@]]"
+          (pp_list_elements table index steps (self false)) fields
     | Tuple { name = ""; fields } ->
-        fprintf ppf "(@[<hv>%a@])" (pp_fields (pp_tuple_field (self false)) ",") fields
+        fprintf ppf "(@[<hv>%a@])"
+          (pp_fields steps (pp_tuple_field (self false)) ",") fields
     | Tuple { name; fields }
       when field_count fields = 1 && not fragile && fst (field_get fields 0) = "" ->
         fprintf ppf "%s @[<hv>%a@]" name (self true) (snd (field_get fields 0))
     | Tuple { name; fields } ->
         lpar ppf fragile;
         if name <> "" then fprintf ppf "%s " name;
-        fprintf ppf "(@[<hv>%a@])" (pp_fields (pp_tuple_field (self false)) ",") fields;
+        fprintf ppf "(@[<hv>%a@])"
+          (pp_fields steps (pp_tuple_field (self false)) ",") fields;
         rpar ppf fragile
     | Record {name; fields} ->
         let protect = fragile && name <> "" in
         lpar ppf protect;
         if name <> "" then fprintf ppf "%s " name;
-        fprintf ppf "{@[<hv>%a@]}" (pp_fields (pp_record_field (self false)) ";") fields;
+        fprintf ppf "{@[<hv>%a@]}"
+          (pp_fields steps (pp_record_field (self false)) ";") fields;
         rpar ppf protect
     | Extension (name, uid, fields) when field_count fields = 0 ->
         fprintf ppf "%s/%d" name uid
     | Extension (name, uid, fields) ->
         fprintf ppf "%s/%d (@[<hv>%a@])"
-          name uid (pp_fields (self false) ",") fields
+          name uid (pp_fields steps (self false) ",") fields
     | Polymorphic_variant (name, payload) ->
         fprintf ppf "%a`%s @[<hv>%a@]%a"
           lpar fragile
@@ -561,7 +656,12 @@ module Dyn = struct
           (self true) d
           rpar fragile
 
+  let get_index = function
+    | Some index -> index
+    | None -> Index.self_index ()
+
   let pp_raw table ?index ?(depth=20) ?(steps=ref max_int) fragile ppf obj =
+    let index = get_index index in
     let rec aux depth fragile ppf obj =
       if depth <= 0 || !steps <= 0 then
         Format.pp_print_string ppf "..."
@@ -573,7 +673,8 @@ module Dyn = struct
           Format.pp_print_string ppf "<cycle>"
         else (
           if protect then H.add table raw ();
-          pp_dynval table (aux (depth - 1)) fragile ppf (view ?index obj);
+          pp_dynval table index steps (aux (depth - 1)) fragile ppf
+            (view ~index obj);
           if protect then H.remove table raw
         )
       )
@@ -583,9 +684,11 @@ module Dyn = struct
   let pp ?index ?depth ?steps ppf obj =
     pp_raw (H.create 7) ?index ?depth ?steps false ppf obj
 
-  let pp_view ?index ?depth ?steps ppf view =
+  let pp_view ?index ?depth ?(steps=ref max_int) ppf view =
+    let index = get_index index in
     let table = H.create 7 in
-    pp_dynval table (pp_raw table ?index ?depth ?steps) false ppf view
+    pp_dynval table index steps (pp_raw table ~index ?depth ~steps) false ppf
+      view
 end
 
 module Print = struct
@@ -659,8 +762,11 @@ module Json = struct
 
   (* ---------- Generic json writer ---------- *)
 
-  let write ~output_substring ~output_char
+  type root = View of view | Value of Dyn.t
+
+  let write_root ~output_substring ~output_char
         ?index ?(depth = 20) ?(steps = ref max_int) root =
+    let index = Dyn.get_index index in
     let output_string s = output_substring s 0 (String.length s) in
     let table = H.create 7 in
 
@@ -742,11 +848,11 @@ module Json = struct
           decr steps;
           let raw = get_obj obj in
           let protect = Obj.is_block raw && Obj.tag raw < Obj.no_scan_tag in
-          if not protect then dynval (depth - 1) (view ?index obj)
+          if not protect then dynval (depth - 1) (view ~index obj)
           else if H.mem table raw then output_string "\"<cycle>\""
           else begin
               H.add table raw ();
-              dynval (depth - 1) (view ?index obj);
+              dynval (depth - 1) (view ~index obj);
               H.remove table raw
             end
         end
@@ -771,12 +877,7 @@ module Json = struct
       | Constant ["false"] -> output_string "false"
       | Constant names -> json_string (String.concat "|" names)
       | Array arr ->
-         output_char '[';
-         for i = 0 to field_count arr - 1 do
-           if i > 0 then output_char ',';
-           value depth (field_get arr i)
-         done;
-         output_char ']'
+         elements depth (field_count arr) (field_get arr)
       | Tuple { name = "::"; fields } when field_count fields = 2 ->
          list depth fields
       | Tuple { name = ""; fields } -> tuple depth fields
@@ -791,14 +892,7 @@ module Json = struct
          open_constr name;
          let n = field_count fields in
          if n = 1 then value depth (field_get fields 0)
-         else begin
-             output_char '[';
-             for i = 0 to n - 1 do
-               if i > 0 then output_char ',';
-               value depth (field_get fields i)
-             done;
-             output_char ']'
-           end;
+         else elements depth n (field_get fields);
          output_char '}'
       | Polymorphic_variant (name, p) ->
          open_constr name; value depth p; output_char '}'
@@ -809,6 +903,23 @@ module Json = struct
       | Abstract -> output_string "\"<abstract>\""
       | Custom -> output_string "\"<custom>\""
       | Unknown -> output_string "\"<unknown>\""
+
+    (* JSON array of [n] elements, ending with "..." once the step budget is
+       exhausted. *)
+    and elements depth n get =
+      output_char '[';
+      let rec loop i =
+        if i < n then begin
+          if i > 0 then output_char ',';
+          if i > 0 && !steps <= 0 then output_string "\"...\""
+          else begin
+            value depth (get i);
+            loop (i + 1)
+          end
+        end
+      in
+      loop 0;
+      output_char ']'
 
     (* Lone unlabelled argument is inlined:
        [Some 1] -> {"Some":1}, [Foo (1, 2)] -> {"Foo":[1,2]}. *)
@@ -824,14 +935,9 @@ module Json = struct
       for i = 0 to n - 1 do
         if fst (field_get fields i) <> "" then labelled := true
       done;
-      if not !labelled then begin
-          output_char '[';
-          for i = 0 to n - 1 do
-            if i > 0 then output_char ',';
-            value depth (snd (field_get fields i))
-          done;
-          output_char ']'
-        end else begin
+      if not !labelled then
+        elements depth n (fun i -> snd (field_get fields i))
+      else begin
           output_char '{';
           for i = 0 to n - 1 do
             if i > 0 then output_char ',';
@@ -861,7 +967,7 @@ module Json = struct
       let rec loop fields visited =
         value depth (snd (field_get fields 0));
         let cdr = snd (field_get fields 1) in
-        match view ?index cdr with
+        match view ~index cdr with
         | Constant ["[]"] | Int_or_constant (0, _) -> visited
         | Tuple { name = "::"; fields } when field_count fields = 2 ->
            output_char ',';
@@ -883,7 +989,12 @@ module Json = struct
       List.iter (H.remove table) (loop fields []);
       output_char ']'
     in
-    dynval (depth - 1) root
+    match root with
+    | View v -> dynval (depth - 1) v
+    | Value v -> value depth v
+
+  let write ~output_substring ~output_char ?index ?depth ?steps root =
+    write_root ~output_substring ~output_char ?index ?depth ?steps (View root)
 
   (* ---------- Instances ---------- *)
 
@@ -904,12 +1015,22 @@ module Json = struct
       ~output_char:(output_char oc)
       ?index ?depth ?steps root
 
+  (* Start from the value itself (rather than its view) so that the root is
+     part of cycle detection. *)
   let to_buffer ?index ?depth ?steps b root =
-    view_to_buffer ?index ?depth ?steps b (Dyn.view_any ?index root)
+    write_root
+      ~output_substring:(Buffer.add_substring b)
+      ~output_char:(Buffer.add_char b)
+      ?index ?depth ?steps (Value (Dyn.lift_any root))
 
   let to_string ?index ?depth ?steps root =
-    view_to_string ?index ?depth ?steps (Dyn.view_any ?index root)
+    let b = Buffer.create 256 in
+    to_buffer ?index ?depth ?steps b root;
+    Buffer.contents b
 
   let to_channel ?index ?depth ?steps oc root =
-    view_to_channel ?index ?depth ?steps oc (Dyn.view_any ?index root)
+    write_root
+      ~output_substring:(output_substring oc)
+      ~output_char:(output_char oc)
+      ?index ?depth ?steps (Value (Dyn.lift_any root))
 end

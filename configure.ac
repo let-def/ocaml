@@ -133,7 +133,8 @@ AC_SUBST([OCAML_VERSION_EXTRA], [OCAML__VERSION_EXTRA])
 AC_SUBST([OCAML_VERSION_SHORT], [OCAML__VERSION_SHORT])
 AC_SUBST([OCAML_RELEASE_NUMBER], [OCAML__RELEASE_NUMBER])
 AC_DEFINE([MAGIC_NUMBER_PREFIX], ["][MAGIC_NUMBER__PREFIX]["])
-AC_DEFINE([MAGIC_NUMBER_VERSION], ["][MAGIC_NUMBER__VERSION]["])
+# Only used for the magic number of executables (runtime/caml/exec.h)
+AC_DEFINE([MAGIC_NUMBER_VERSION], ["][EXEC__VERSION]["])
 AC_DEFINE([EXEC_MAGIC_LENGTH], [MAGIC_NUMBER__LENGTH])
 AC_SUBST([MAGIC_LENGTH], [MAGIC_NUMBER__LENGTH])
 AC_DEFINE([EXEC_FORMAT], ["][EXEC__FORMAT]["])
@@ -3196,6 +3197,12 @@ unset ac_cv_header_flexdll_h
 # Introspection requires reserving header bits
 AS_IF([test "$introspect" = "true" -a \( -z "$reserved_header_bits" -o "$reserved_header_bits" = "0" \) ],
   [AC_MSG_ERROR([--enable-introspect requires that you also set --enable-reserved-header-bits=BITS greater than 0])])
+
+# Block descriptor hashes have 30 bits (see Introspect.Desc.hash_bits)
+AS_IF([test "$introspect" = "true" -a "$reserved_header_bits" -gt 30],
+  [AC_MSG_WARN(m4_normalize([--enable-introspect uses at most 30 reserved
+    header bits, the other $(expr $reserved_header_bits - 30) reserved
+    bit(s) will be unused]))])
 
 # Evaluate install directories
 # (this is needed for the OCaml configuration module)

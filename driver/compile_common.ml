@@ -25,6 +25,9 @@ type info = {
 
 let with_info ~native ~tool_name ~dump_ext unit_info k =
   Compmisc.init_path ();
+  (* Block descriptors are collected per compilation unit (not in
+     [Compmisc.init_path]: the toplevel's descriptor list must not be reset) *)
+  Block_desc.reset ();
   Env.set_current_unit unit_info ;
   let env = Compmisc.initial_env() in
   let dump_file = String.concat "." [Unit_info.prefix unit_info; dump_ext] in

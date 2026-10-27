@@ -7,8 +7,9 @@ type t = Introspect.Desc.t
 val dump : (string -> unit) -> t -> unit
 val compare : t -> t -> int
 val format : Format.formatter -> t -> unit
-val mask : int
 
+(* Index of a descriptor in the reserved header bits of the target
+   configuration (0 if introspection is disabled). *)
 val index : t -> int
 
 val empty : t
@@ -23,11 +24,18 @@ val make_polymorphic_variant : string -> t
 
 val pending_descriptors : unit -> t list
 
-type library = private t list
+(* A library is a sorted list of descriptors, each paired with its hash
+   ([Introspect.Desc.hash]). The runtime uses the stored hash and never
+   recomputes it. *)
+type library = private Introspect.Desc.entry list
 val empty_library : library
-val iter_library : (t -> unit) -> library -> unit
+val iter_library : (int -> t -> unit) -> library -> unit
 
 val emit : unit -> library
 val reset : unit -> unit
 
 val link : library list -> library
+
+(* Report descriptors that share an index in the target configuration and
+   cannot be distinguished at runtime by the tag and size of blocks. *)
+val report_collisions : Format.formatter -> library -> unit

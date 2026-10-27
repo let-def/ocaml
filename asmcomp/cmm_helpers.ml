@@ -54,6 +54,8 @@ let base_block_header tag sz =
   Nativeint.add (Nativeint.shift_left (Nativeint.of_int sz) 10)
                 (Nativeint.of_int tag)
 
+let reserved_index desc = Block_desc.index desc
+
 let reserved_header v =
   if Config.reserved_header_bits = 0
   then 0n
@@ -63,10 +65,8 @@ let reserved_header v =
 let block_header ?desc tag sz =
   let header = base_block_header tag sz in
   match desc with
-  | Some desc when Sys.introspection_enabled ->
-     Nativeint.logor header
-       (reserved_header (Introspect.Desc.hash desc))
-  | _ -> header
+  | Some desc -> Nativeint.logor header (reserved_header (reserved_index desc))
+  | None -> header
 
 (* Static data corresponding to "value"s must be marked black in case we are
    in no-naked-pointers mode.  See [caml_darken] and the code below that emits
@@ -851,10 +851,21 @@ let make_alloc_generic ?desc set_fn dbg tag wordsize args =
       [] -> Cvar id
     | e1::el -> Csequence(set_fn (Cvar id) (Cconst_int (idx, dbg)) e1 dbg,
                           fill_fields (idx + 2) el) in
-    Clet(VP.create id,
-         Cop(Cextcall("caml_alloc_shr_check_gc", typ_val, [], true),
-                 [Cconst_int (wordsize, dbg); Cconst_int (tag, dbg)], dbg),
-         fill_fields 1 args)
+    let reserved =
+      match desc with
+      | Some desc -> reserved_index desc
+      | None -> 0
+    in
+    let alloc =
+      if reserved = 0 then
+        Cop(Cextcall("caml_alloc_shr_check_gc", typ_val, [], true),
+            [Cconst_int (wordsize, dbg); Cconst_int (tag, dbg)], dbg)
+      else
+        Cop(Cextcall("caml_alloc_shr_reserved_check_gc", typ_val, [], true),
+            [Cconst_int (wordsize, dbg); Cconst_int (tag, dbg);
+             Cconst_int (reserved, dbg)], dbg)
+    in
+    Clet(VP.create id, alloc, fill_fields 1 args)
   end
 
 let make_alloc ?desc dbg tag args =

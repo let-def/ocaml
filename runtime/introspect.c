@@ -15,6 +15,12 @@
 
 #define CAML_INTERNALS
 
+#include "caml/config.h"
+#ifndef _WIN32
+#include <unistd.h>
+#else
+#include <io.h>
+#endif
 #include "caml/alloc.h"
 #include "caml/memory.h"
 #include "caml/mlvalues.h"
@@ -26,27 +32,30 @@
 # include "caml/stack.h"
 #endif
 
+static value compiler_block_descs = Val_unit;
+static atomic_int compiler_block_descs_ready = 0;
+static caml_plat_mutex compiler_block_descs_lock = CAML_PLAT_MUTEX_INITIALIZER;
+
 CAMLprim value caml_compiler_block_descs(value unit)
 {
-  (void)unit;
-  static value tag_ref = 0;
-  static caml_plat_mutex tag_lock = CAML_PLAT_MUTEX_INITIALIZER;
+  CAMLparam1(unit);
+  CAMLlocal1(r);
 
-  if (tag_ref != 0)
-    return tag_ref;
+  if (!atomic_load_acquire(&compiler_block_descs_ready)) {
+    /* Allocate outside of the lock: allocation can trigger a GC */
+    r = caml_alloc_small(1, 0);
+    Field(r, 0) = Val_emptylist;
 
-  caml_plat_lock_non_blocking(&tag_lock);
-
-  if (tag_ref == 0)
-  {
-    tag_ref = caml_alloc(1, 0);
-    Store_field(tag_ref, 0, Val_unit);
-    caml_register_generational_global_root(&tag_ref);
+    caml_plat_lock_non_blocking(&compiler_block_descs_lock);
+    if (!atomic_load_relaxed(&compiler_block_descs_ready)) {
+      compiler_block_descs = r;
+      caml_register_generational_global_root(&compiler_block_descs);
+      atomic_store_release(&compiler_block_descs_ready, 1);
+    }
+    caml_plat_unlock(&compiler_block_descs_lock);
   }
 
-  caml_plat_unlock(&tag_lock);
-
-  return tag_ref;
+  CAMLreturn(compiler_block_descs);
 }
 
 #ifdef NATIVE_CODE
@@ -84,9 +93,14 @@ CAMLprim value caml_read_bdsc_section(value unit)
 
   caml_read_section_descriptors(fd, &trail);
   if (caml_seek_optional_section(fd, &trail, "BDSC") != -1) {
+    caml_stat_free(trail.section);
+    /* The channel owns [fd] from now on */
     chan = caml_open_descriptor_in(fd);
     library = caml_input_val(chan);
     caml_close_channel(chan);
+  } else {
+    caml_stat_free(trail.section);
+    close(fd);
   }
 
   CAMLreturn(library);

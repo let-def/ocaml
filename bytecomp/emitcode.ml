@@ -467,7 +467,7 @@ let to_file outchan artifact_info ~required_globals code =
       cu_debugsize = size_debug;
       cu_block_descs = Block_desc.emit () } in
   (*prerr_endline "Emitcode.cu_block_descs";
-  Block_desc.iter_library begin fun bdesc ->
+  Block_desc.iter_library begin fun _hash bdesc ->
     Intro.Desc.dump (output_string stderr) bdesc;
     output_char stderr '\n';
   end compunit.cu_block_descs;*)

@@ -45,6 +45,8 @@ CAMLextern value caml_alloc_9(tag_t, value, value, value, value,
 CAMLextern value caml_alloc_small (mlsize_t, tag_t);
 CAMLextern value caml_alloc_small_reserved (mlsize_t, tag_t, reserved_t);
 CAMLextern value caml_alloc_shr_check_gc (mlsize_t, tag_t);
+CAMLextern value caml_alloc_shr_reserved_check_gc (mlsize_t, tag_t,
+                                                   reserved_t);
 CAMLextern value caml_alloc_tuple (mlsize_t);
 CAMLextern value caml_alloc_float_array (mlsize_t len);
 CAMLextern value caml_alloc_string (mlsize_t len);  /* len in bytes (chars) */

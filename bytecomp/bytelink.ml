@@ -639,14 +639,12 @@ let link_bytecode ?final_name tolink exec_name standalone =
          output_debug_info outchan;
          Bytesections.record toc_writer DBUG
        end;
-       (* Debug info *)
+       (* Block descriptors *)
        if not (List.is_empty !block_descs) then begin
          let descs = Block_desc.link !block_descs in
          block_descs := [descs];
-         (*List.iter begin fun bdesc ->
-           Intro.Desc.dump (output_string stdout) bdesc;
-           output_char stdout '\n'
-           end !block_descs;*)
+         if !Clflags.verbose then
+           Block_desc.report_collisions Format.err_formatter descs;
          Marshal.to_channel outchan descs [Marshal.Reserved_bits];
          Bytesections.record toc_writer BDSC;
        end;

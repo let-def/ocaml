@@ -735,10 +735,10 @@ let rec comp_expr stack_info env exp sz cont =
       else
         fatal_error "Reperform used in non-tail position"
   | Lprim (Pduparray (kind, mutability),
-           [Lprim (Pmakearray (kind',_,_),args,_)], loc) ->
+           [Lprim (Pmakearray (kind',_,bdesc),args,_)], loc) ->
       assert (kind = kind');
       comp_expr stack_info env
-        (Lprim (Pmakearray (kind, mutability, Block_desc.empty), args, loc))
+        (Lprim (Pmakearray (kind, mutability, bdesc), args, loc))
         sz cont
   | Lprim (Pduparray _, [arg], loc) ->
       let prim_obj_dup =

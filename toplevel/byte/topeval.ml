@@ -227,6 +227,8 @@ let load_compunit ic filename ppf compunit =
       seek_in ic compunit.cu_debug;
       [| input_value ic |]
     end in
+  Introspect.Index.add_dynamic_library
+    (compunit.cu_block_descs : Block_desc.library :> _ list);
   begin try
     may_trace := true;
     let _bytecode, closure = Meta.reify_bytecode code events None in

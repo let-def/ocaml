@@ -105,7 +105,8 @@ val update_follow_fork_mode : unit -> unit
 
 (* Handling of remote values *)
 
-val remote_block_descriptors : unit -> (Introspect.Desc.t list, string) result
+val remote_block_descriptors :
+  unit -> (Introspect.Desc.entry list, string) result
 
 module Remote_value :
   sig

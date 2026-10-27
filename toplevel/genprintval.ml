@@ -162,12 +162,22 @@ module H = Hashtbl.Make(struct type t = Obj.t let equal = (==) let hash = Hashtb
 
 let obj_printer ?index ?(max_printer_depth=20) ?(printer_steps=ref max_int) _kind obj =
   let open Introspect in
-  let list_fields f fields =
-    let acc = ref [] in
-    for i = Dyn.field_count fields - 1 downto 0 do
-      acc := f (Dyn.field_get fields i) :: !acc
-    done;
-    !acc
+  let index = match index with
+    | Some index -> index
+    | None -> Index.self_index ()
+  in
+  (* With [~ellipsis], stop with it once the step budget is exhausted. *)
+  let list_fields ?ellipsis f fields =
+    let n = Dyn.field_count fields in
+    let rec loop i =
+      if i >= n then []
+      else match ellipsis with
+        | Some ellipsis when i > 0 && !printer_steps <= 0 -> [ellipsis]
+        | _ ->
+            let x = f (Dyn.field_get fields i) in
+            x :: loop (i + 1)
+    in
+    loop 0
   in
   let table = H.create 7 in
   let protect_cycle obj f =
@@ -190,7 +200,7 @@ let obj_printer ?index ?(max_printer_depth=20) ?(printer_steps=ref max_int) _kin
     else
       let open Outcometree in
       let oide_ident printed_name = Oide_ident {printed_name} in
-      match Dyn.view ?index obj with
+      match Dyn.view ~index obj with
       | String str ->
           Oval_string (str, 70, Ostr_string)
       | Float f -> Oval_float f
@@ -202,7 +212,8 @@ let obj_printer ?index ?(max_printer_depth=20) ?(printer_steps=ref max_int) _kin
           Oval_stuff (String.concat " or " names, None)
       | Array fields ->
           protect_cycle obj @@ fun () ->
-          Oval_array (list_fields (print (depth - 1)) fields, Mutable)
+          Oval_array (list_fields ~ellipsis:Oval_ellipsis
+                        (print (depth - 1)) fields, Mutable)
       | Tuple {name; fields} ->
           protect_cycle obj @@ fun () ->
           let pf (k,v) =
@@ -232,7 +243,8 @@ let obj_printer ?index ?(max_printer_depth=20) ?(printer_steps=ref max_int) _kin
       | Extension (name, uid, fields) ->
           let printed_name = Printf.sprintf "%s/%d" name uid in
           let path = Oide_ident {printed_name} in
-          Oval_constr (path, list_fields (print (depth - 1)) fields)
+          Oval_constr (path, list_fields ~ellipsis:Oval_ellipsis
+                               (print (depth - 1)) fields)
       | Closure  -> Oval_stuff ("<fun>", None)
       | Abstract -> Oval_stuff ("<abstract>", None)
       | Custom   -> Oval_stuff ("<custom>", None)

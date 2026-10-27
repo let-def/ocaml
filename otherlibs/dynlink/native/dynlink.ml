@@ -51,7 +51,8 @@ module Native = struct
   external ndl_getmap : unit -> global_map list = "caml_natdynlink_getmap"
   external ndl_globals_inited : unit -> int = "caml_natdynlink_globals_inited"
   external ndl_loadsym : string -> Obj.t = "caml_natdynlink_loadsym"
-  external ndl_loadintrospect : ndl_handle -> Introspect.Desc.t list = "caml_natdynlink_loadintrospect"
+  external ndl_loadintrospect : ndl_handle -> Introspect.Desc.entry list
+    = "caml_natdynlink_loadintrospect"
 
   module Unit_header = struct
     type t = dynunit

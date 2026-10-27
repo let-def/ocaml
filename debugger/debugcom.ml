@@ -257,16 +257,25 @@ let input_remote_value ic =
 let output_remote_value ic v =
   output_substring ic v 0 value_size
 
-let remote_block_descriptors () : (Introspect.Desc.t list, string) result =
-  (*prerr_endline "Request BDSC";*)
+let fetch_block_descriptors () : (Introspect.Desc.entry list, string) result =
   output_char !conn.io_out 'D';
   flush !conn.io_out;
   match input_value !conn.io_in with
-  | tags ->
-      (*prerr_endline "Received BDSC";*)
-      Ok tags
+  | tags -> Ok tags
   | exception (End_of_file | Failure _) ->
       Error "<cannot fetch remote block descriptors>"
+
+(* Descriptors are fetched once per connection: a new connection can be a
+   different run, or a forked process. *)
+let block_descriptors_cache = ref None
+
+let remote_block_descriptors () =
+  match !block_descriptors_cache with
+  | Some (c, result) when c == !conn -> result
+  | _ ->
+      let result = fetch_block_descriptors () in
+      block_descriptors_cache := Some (!conn, result);
+      result
 
 module Remote_value =
   struct

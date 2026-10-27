@@ -73,14 +73,22 @@ module Printer = Genprintval.Make(Debugcom.Remote_value)(EvalPath)
 let max_printer_depth = ref 20
 let max_printer_steps = ref 300
 
-let descriptors = lazy (
-  let index = Introspect.Index.make () in
-  begin match Debugcom.remote_block_descriptors () with
-  | Ok descs -> Introspect.Index.register_list index descs
-  | Error msg -> prerr_endline ("Descriptors initialization: " ^ msg)
-  end;
-  index
-)
+(* Index of the descriptors of the debuggee, rebuilt when the debuggee
+   changes (see [Debugcom.remote_block_descriptors]) *)
+let descriptors = ref None
+
+let get_descriptors () =
+  let result = Debugcom.remote_block_descriptors () in
+  match !descriptors with
+  | Some (r, index) when r == result -> index
+  | _ ->
+      let index = Introspect.Index.make () in
+      begin match result with
+      | Ok descs -> Introspect.Index.register_list index descs
+      | Error msg -> prerr_endline ("Descriptors initialization: " ^ msg)
+      end;
+      descriptors := Some (result, index);
+      index
 
 let opaque_printer ?max_printer_depth ?printer_steps kind obj =
   match Debugcom.Remote_value.obj obj with
@@ -88,7 +96,7 @@ let opaque_printer ?max_printer_depth ?printer_steps kind obj =
       Some (Outcometree.Oval_stuff (msg, None))
   | Result.Ok obj ->
      Genprintval.obj_printer
-       ~index:(Lazy.force descriptors)
+       ~index:(get_descriptors ())
        ?max_printer_depth ?printer_steps kind obj
 
 let print_exception ppf obj =

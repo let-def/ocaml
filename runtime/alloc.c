@@ -101,6 +101,18 @@ CAMLexport value caml_alloc_shr_check_gc (mlsize_t wosize, tag_t tag)
   for (mlsize_t i = 0; i < wosize; i++) Field (result, i) = Val_unit;
   return result;
 }
+
+/* Same as [caml_alloc_shr_check_gc], with reserved header bits
+   (used for block descriptors). */
+CAMLexport value caml_alloc_shr_reserved_check_gc (mlsize_t wosize, tag_t tag,
+                                                   reserved_t reserved)
+{
+  CAMLassert(tag < No_scan_tag);
+  caml_check_urgent_gc (Val_unit);
+  value result = caml_alloc_shr_reserved (wosize, tag, reserved);
+  for (mlsize_t i = 0; i < wosize; i++) Field (result, i) = Val_unit;
+  return result;
+}
 #endif
 
 /* Copy the values to be preserved to a different array.

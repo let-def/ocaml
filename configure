@@ -3618,7 +3618,8 @@ OCAML_RELEASE_NUMBER=21
 
 printf '%s\n' "#define MAGIC_NUMBER_PREFIX \"Caml1999\"" >>confdefs.h
 
-printf '%s\n' "#define MAGIC_NUMBER_VERSION \"037\"" >>confdefs.h
+# Only used for the magic number of executables (runtime/caml/exec.h)
+printf '%s\n' "#define MAGIC_NUMBER_VERSION \"901\"" >>confdefs.h
 
 printf '%s\n' "#define EXEC_MAGIC_LENGTH 12" >>confdefs.h
 
@@ -3626,13 +3627,13 @@ MAGIC_LENGTH=12
 
 printf '%s\n' "#define EXEC_FORMAT \"X\"" >>confdefs.h
 
-EXEC_MAGIC_NUMBER=Caml1999X037
+EXEC_MAGIC_NUMBER=Caml1999X901
 
 CMI_MAGIC_NUMBER=Caml1999I037
 
-CMO_MAGIC_NUMBER=Caml1999O037
+CMO_MAGIC_NUMBER=Caml1999O901
 
-CMA_MAGIC_NUMBER=Caml1999A037
+CMA_MAGIC_NUMBER=Caml1999A901
 
 
 
@@ -3640,7 +3641,7 @@ AST_IMPL_MAGIC_NUMBER=Caml1999M037
 
 AST_INTF_MAGIC_NUMBER=Caml1999N037
 
-CMXS_MAGIC_NUMBER=Caml1999D037
+CMXS_MAGIC_NUMBER=Caml1999D901
 
 CMT_MAGIC_NUMBER=Caml1999T037
 
@@ -25029,11 +25030,11 @@ fi
 
 if $flambda
 then :
-  CMX_MAGIC_NUMBER=Caml1999y037
-  CMXA_MAGIC_NUMBER=Caml1999z037
+  CMX_MAGIC_NUMBER=Caml1999y901
+  CMXA_MAGIC_NUMBER=Caml1999z901
 else case e in #(
-  e) CMX_MAGIC_NUMBER=Caml1999Y037
-  CMXA_MAGIC_NUMBER=Caml1999Z037 ;;
+  e) CMX_MAGIC_NUMBER=Caml1999Y901
+  CMXA_MAGIC_NUMBER=Caml1999Z901 ;;
 esac
 fi
 
@@ -25489,6 +25490,13 @@ unset ac_cv_header_flexdll_h
 if test "$introspect" = "true" -a \( -z "$reserved_header_bits" -o "$reserved_header_bits" = "0" \)
 then :
   as_fn_error $? "--enable-introspect requires that you also set --enable-reserved-header-bits=BITS greater than 0" "$LINENO" 5
+fi
+
+# Block descriptor hashes have 30 bits (see Introspect.Desc.hash_bits)
+if test "$introspect" = "true" -a "$reserved_header_bits" -gt 30
+then :
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: --enable-introspect uses at most 30 reserved header bits, the other $(expr $reserved_header_bits - 30) reserved bit(s) will be unused" >&5
+printf '%s\n' "$as_me: WARNING: --enable-introspect uses at most 30 reserved header bits, the other $(expr $reserved_header_bits - 30) reserved bit(s) will be unused" >&2;}
 fi
 
 # Evaluate install directories

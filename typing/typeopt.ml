@@ -228,8 +228,6 @@ let value_kind_union k1 k2 =
   if k1 = k2 then k1
   else Pgenval
 
-let cstr_cache = Hashtbl.create 7
-
 let approx env ty =
   let open Introspect in
   match scrape env ty with
@@ -244,23 +242,20 @@ let approx env ty =
       | Tconstr (p, _, _) when Path.same p Predef.path_char ->
           Desc.Char
       | Tconstr (p, _, _) ->
+          (* [scrape] may have unfolded an unboxed type to a path that is
+             not in [env] *)
           begin match Env.find_type_descrs p env with
+          | exception Not_found -> Desc.Any
           | Type_variant ((cstr :: _ as cstrs), _)
             when cstr.Data_types.cstr_consts > 0 ->
-              begin match Hashtbl.find cstr_cache cstrs with
-              | result -> result
-              | exception Not_found ->
-                  let names = Array.make cstr.Data_types.cstr_consts "" in
-                  List.iter (fun cstr ->
-                      match cstr.Data_types.cstr_tag with
-                      | Data_types.Cstr_constant i ->
-                          names.(i) <- cstr.Data_types.cstr_name
-                      | _ -> ()
-                    ) cstrs;
-                  let result = Desc.Constants names in
-                  Hashtbl.add cstr_cache cstrs result;
-                  result
-              end
+              let names = Array.make cstr.Data_types.cstr_consts "" in
+              List.iter (fun cstr ->
+                  match cstr.Data_types.cstr_tag with
+                  | Data_types.Cstr_constant i ->
+                      names.(i) <- cstr.Data_types.cstr_name
+                  | _ -> ()
+                ) cstrs;
+              Desc.Constants names
           | _ -> Desc.Any
           end
       | Tvariant _ ->

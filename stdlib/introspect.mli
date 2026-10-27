@@ -32,7 +32,21 @@ module Desc : sig
 
   val view : t -> view
 
+  (* Hash of a descriptor: a non-negative integer of at most [hash_bits]
+     bits, identical on all platforms.  Only [unknown] hashes to 0. *)
   val hash : t -> int
+  val hash_bits : int
+
+  (* [index_of_hash ~bits h] is the index stored in the [bits] reserved
+     header bits of blocks described by a descriptor of hash [h].
+     It is 0 ("no descriptor") only if [h = 0] or [bits = 0]. *)
+  val index_of_hash : bits:int -> int -> int
+  val index : bits:int -> t -> int
+
+  (* Descriptors are stored with the hash computed by the compiler, the
+     runtime never recomputes it. *)
+  type entry = int * t
+  val entry : t -> entry
 
   val hash_variant : string -> int
 
@@ -40,10 +54,10 @@ module Desc : sig
 
   val to_string : t -> string
 
-  external read_self_descriptors : unit -> t list =
+  external read_self_descriptors : unit -> entry list =
     "caml_read_bdsc_section"
 
-  external compiler_descriptors : unit -> t list ref =
+  external compiler_descriptors : unit -> entry list ref =
     "caml_compiler_block_descs"
 end
 
@@ -63,8 +77,8 @@ module Index : sig
   type t
 
   val make : unit -> t
-  val register : t -> Desc.t -> unit
-  val register_list : t -> Desc.t list -> unit
+  val register : t -> Desc.entry -> unit
+  val register_list : t -> Desc.entry list -> unit
   val lookup : t -> int -> Desc.t list
   val lookup_by_reserved_bits : t -> Obj.t -> Desc.t list
   val lookup_variant : t -> int -> string list
@@ -78,8 +92,8 @@ module Index : sig
 
   (* Descriptors of dynamic libraries loaded in the current process.
      (automatically added to [self_index ()]) *)
-  val dynamic_libraries : unit -> Desc.t list list
-  val add_dynamic_library : Desc.t list -> unit
+  val dynamic_libraries : unit -> Desc.entry list list
+  val add_dynamic_library : Desc.entry list -> unit
 end
 
 module Dyn : sig

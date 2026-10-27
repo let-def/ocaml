@@ -102,27 +102,39 @@ m4_define([OCAML__RELEASE_EXTRA],
 m4_define([MAGIC_NUMBER__PREFIX], [Caml1999])
 m4_define([MAGIC_NUMBER__VERSION], [037])
 
+# introcaml: block descriptors change the format of executables and of
+# compilation units (bytecode and native).  These formats use introcaml
+# versions 9xx, where xx is the revision of the introcaml formats, so that
+# they never clash with upstream versions (still far below 900).
+# The other formats (cmi, cmt, ast, linear) are unchanged and keep the
+# upstream version.
+# Note: js_of_ocaml expects cmo and cma files to use the version of
+# executables, so EXEC, CMO and CMA must always have the same version.
+m4_define([MAGIC_NUMBER__INTROCAML_VERSION], [901])
+
 # The following macro is used to define all our magic numbers
 # Its first argument is the name of the file type described by that
 # magic number and its second argument is the character used to
-# characterize that file type
+# characterize that file type.  The optional third argument is the version
+# (MAGIC_NUMBER__VERSION by default).
 
 AC_DEFUN([DEFINE_MAGIC_NUMBER],
   [m4_define([$1__MAGIC_NUMBER],
-    [MAGIC_NUMBER__PREFIX[]$2[]MAGIC_NUMBER__VERSION])])
+    [MAGIC_NUMBER__PREFIX[]$2[]m4_default([$3], [MAGIC_NUMBER__VERSION])])])
 
 m4_define(EXEC__FORMAT, [X])
-DEFINE_MAGIC_NUMBER([EXEC], EXEC__FORMAT)
+m4_define([EXEC__VERSION], [MAGIC_NUMBER__INTROCAML_VERSION])
+DEFINE_MAGIC_NUMBER([EXEC], EXEC__FORMAT, [EXEC__VERSION])
 DEFINE_MAGIC_NUMBER([CMI], [I])
-DEFINE_MAGIC_NUMBER([CMO], [O])
-DEFINE_MAGIC_NUMBER([CMA], [A])
-DEFINE_MAGIC_NUMBER([CMX_CLAMBDA], [Y])
-DEFINE_MAGIC_NUMBER([CMX_FLAMBDA], [y])
-DEFINE_MAGIC_NUMBER([CMXA_CLAMBDA], [Z])
-DEFINE_MAGIC_NUMBER([CMXA_FLAMBDA], [z])
+DEFINE_MAGIC_NUMBER([CMO], [O], [MAGIC_NUMBER__INTROCAML_VERSION])
+DEFINE_MAGIC_NUMBER([CMA], [A], [MAGIC_NUMBER__INTROCAML_VERSION])
+DEFINE_MAGIC_NUMBER([CMX_CLAMBDA], [Y], [MAGIC_NUMBER__INTROCAML_VERSION])
+DEFINE_MAGIC_NUMBER([CMX_FLAMBDA], [y], [MAGIC_NUMBER__INTROCAML_VERSION])
+DEFINE_MAGIC_NUMBER([CMXA_CLAMBDA], [Z], [MAGIC_NUMBER__INTROCAML_VERSION])
+DEFINE_MAGIC_NUMBER([CMXA_FLAMBDA], [z], [MAGIC_NUMBER__INTROCAML_VERSION])
 DEFINE_MAGIC_NUMBER([AST_IMPL], [M])
 DEFINE_MAGIC_NUMBER([AST_INTF], [N])
-DEFINE_MAGIC_NUMBER([CMXS], [D])
+DEFINE_MAGIC_NUMBER([CMXS], [D], [MAGIC_NUMBER__INTROCAML_VERSION])
 DEFINE_MAGIC_NUMBER([CMT], [T])
 DEFINE_MAGIC_NUMBER([LINEAR], [L])
 m4_define([MAGIC_NUMBER__LENGTH], m4_len(EXEC__MAGIC_NUMBER))
