@@ -1020,7 +1020,14 @@ ocaml_SOURCES = toplevel/topstart.mli toplevel/topstart.ml
 
 ocaml_CMO_FILES = toplevel/topstart.cmo
 
+# With introspection, the toplevel is linked with the stdlib of this build:
+# the boot stdlib is compiled by boot/ocamlc, which is built with a fixed
+# configuration without introspection, so it has no block descriptors.
+ifeq "$(INTROSPECT)" "true"
+OCAML_OVERRIDE_FLAGS ?= -I $(ROOTDIR)/stdlib
+else
 OCAML_OVERRIDE_FLAGS ?=
+endif
 .INTERMEDIATE: ocaml.tmp
 ocaml.tmp: CAMLC = $(BOOT_OCAMLC) $(OCAML_OVERRIDE_FLAGS) $(BOOT_STDLIBFLAGS)
 ocaml.tmp: OC_BYTECODE_LINKFLAGS += -I toplevel/byte -linkall -g
