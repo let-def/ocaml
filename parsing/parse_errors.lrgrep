@@ -1,0 +1,3058 @@
+(**************************************************************************)
+(*                                                                        *)
+(*                                 OCaml                                  *)
+(*                                                                        *)
+(*                         Frederic Bour, Tarides                         *)
+(*                                                                        *)
+(*   Copyright 2026 Institut National de Recherche en Informatique et     *)
+(*     en Automatique.                                                    *)
+(*                                                                        *)
+(*   All rights reserved.  This file is distributed under the terms of    *)
+(*   the GNU Lesser General Public License version 2.1, with the          *)
+(*   special exception on linking described in the file LICENSE.          *)
+(*                                                                        *)
+(**************************************************************************)
+
+(* The messages of the syntax errors, compiled by LRgrep against the
+   automaton of parser.mly: see Makefile.menhir. A rule matches the stack
+   of the parser when it fails, and the token that caused the failure. *)
+
+{
+  open Ast_helper
+  let rec longident_to_string = function
+    | Longident.Lident n -> n
+    | Longident.Lapply (a, b) ->
+      longident_to_string a.txt ^ "(" ^ longident_to_string b.txt ^ ")"
+    | Longident.Ldot (a, n) ->
+      longident_to_string a.txt ^ "." ^ n.txt
+
+  (* Curried constructor arguments in a pattern, e.g. `Pair x y`
+     (https://github.com/ocaml/ocaml/issues/10990). *)
+  let report_curried_constructor ?outer inner (token : Parser.token) =
+    let token = match token with
+      | UNDERSCORE -> "_"
+      | LIDENT u | UIDENT u -> u
+      | LPAREN -> "..."
+      | _ -> assert false
+    in
+    let inner_msg = longident_to_string inner ^ " (..., " ^ token ^ ")" in
+    "Constructor arguments must be wrapped in parentheses and separated by \
+     commas, e.g. `" ^
+    (match outer with
+     | Some outer -> longident_to_string outer ^ " (" ^ inner_msg ^ ")"
+     | None -> inner_msg) ^ "`"
+
+  let closing_delimiter : Parser.token -> string option = function
+    | RPAREN -> Some ")"
+    | RBRACKET -> Some "]"
+    | RBRACE -> Some "}"
+    | BARRBRACKET -> Some "|]"
+    | GREATERRBRACE -> Some ">}"
+    | GREATERRBRACKET -> Some ">]"
+    | END -> Some "end"
+    | DONE -> Some "done"
+    | _ -> None
+
+  let column (pos : Lexing.position) = pos.pos_cnum - pos.pos_bol
+
+  (* In an application spanning several lines, find the first argument
+     starting a line at a column not greater than [col], and return the end
+     of what precedes it. *)
+  let rec split_at_line_break ~col (e : Parsetree.expression) =
+    match e.pexp_desc with
+    | Pexp_apply (f, args) ->
+      let args =
+        List.sort (fun (_, a) (_, b) ->
+            compare a.Parsetree.pexp_loc.loc_start.pos_cnum
+              b.Parsetree.pexp_loc.loc_start.pos_cnum)
+          ((Asttypes.Nolabel, f) :: args)
+      in
+      let rec go prev = function
+        | [] -> None
+        | (_, (a : Parsetree.expression)) :: rest ->
+          let start = a.pexp_loc.loc_start in
+          match prev with
+          | Some (p : Lexing.position)
+            when start.pos_lnum > p.pos_lnum && column start <= col -> Some p
+          | _ ->
+            match split_at_line_break ~col a with
+            | Some _ as result -> result
+            | None -> go (Some a.pexp_loc.loc_end) rest
+      in
+      go None args
+    | _ -> None
+
+  let mkloc loc_start loc_end : Location.t =
+    { loc_start; loc_end; loc_ghost = false }
+
+  (* A message, with secondary messages at other locations. Code is quoted
+     between backquotes; [Parse] prints it with [Misc.Style.inline_code]. *)
+  let message ?(sub=[]) msg =
+    (msg, sub)
+
+  let some_message ?sub msg =
+    Some (message ?sub msg)
+
+  (* `if c then a; else b`: the `;` ended the `if ... then ...`. *)
+  let else_after_semicolon ~several (e : Parsetree.expression) =
+    match e.pexp_desc with
+    | Pexp_ifthenelse (_, _, None) ->
+      let pos = e.pexp_loc.loc_end in
+      some_message "`else` cannot be attached to this `if ... then ...` expression"
+        ~sub:[
+          mkloc pos pos,
+          "the semicolon here terminates the `if ... then ...` expression; " ^
+          if several
+          then "to put several expressions in the `then` branch, \
+                wrap them in parentheses or `begin ... end`"
+          else "remove it to attach an `else` branch"
+        ]
+    | _ -> None
+}
+
+(* Helper rules, called by [error_messages] below, each compiled to its own
+   automaton: they search the stack for a delimiter, which in the main rule
+   would multiply the states of its automaton (all its states below a
+   delimiter would be duplicated).
+
+   The innermost unclosed delimiter, when the lookahead closes one: its
+   text, the closing delimiter it expects, and its position. *)
+rule nearest_opener = parse error %partial
+| ( o0=LPAREN
+   | o1=LBRACKET
+   | o2=LBRACKETLESS
+   | o3=LBRACKETGREATER
+   | o4=LBRACKETPERCENT
+   | o5=LBRACKETPERCENTPERCENT
+   | o6=LBRACKETAT
+   | o7=LBRACKETATAT
+   | o8=LBRACKETATATAT
+   | o9=LBRACKETBAR
+   | o10=LBRACE
+   | o11=LBRACELESS
+   | o12=BEGIN
+   | o13=STRUCT
+   | o14=SIG
+   | o15=OBJECT
+   | o16=DO ); _*
+  @ RPAREN, RBRACKET, RBRACE, BARRBRACKET, GREATERRBRACE, END, DONE
+  %partial { List.find_map (fun (pos, name, closer) ->
+        Option.map (fun p -> (name, closer, p)) pos) [
+        $startpos(o0), "(", ")";
+        $startpos(o1), "[", "]";
+        $startpos(o2), "[<", "]";
+        $startpos(o3), "[>", "]";
+        $startpos(o4), "[%", "]";
+        $startpos(o5), "[%%", "]";
+        $startpos(o6), "[@", "]";
+        $startpos(o7), "[@@", "]";
+        $startpos(o8), "[@@@", "]";
+        $startpos(o9), "[|", "|]";
+        $startpos(o10), "{", "}";
+        $startpos(o11), "{<", ">}";
+        $startpos(o12), "begin", "end";
+        $startpos(o13), "struct", "end";
+        $startpos(o14), "sig", "end";
+        $startpos(o15), "object", "end";
+        $startpos(o16), "do", "done";
+      ] }
+
+(* Whether an unclosed delimiter, anywhere in the stack, is closed by the
+   lookahead. *)
+rule has_opener = parse error %partial
+| LPAREN; _* @ RPAREN { () }
+| (LBRACKET | LBRACKETLESS | LBRACKETGREATER | LBRACKETPERCENT
+  | LBRACKETPERCENTPERCENT | LBRACKETAT | LBRACKETATAT | LBRACKETATATAT); _*
+  @ RBRACKET { () }
+| LBRACKETBAR; _* @ BARRBRACKET { () }
+| LBRACE; _* @ RBRACE { () }
+| LBRACELESS; _* @ GREATERRBRACE { () }
+| (BEGIN | STRUCT | SIG | OBJECT); _* @ END { () }
+| DO; _* @ DONE { () }
+
+(* `if (c then ...`: the delimiter opened in the condition, and the closing
+   delimiter it expects. *)
+rule unclosed_before_then = parse error %partial
+| (dp=LPAREN | db=LBRACKET | dbb=LBRACKETBAR | dc=LBRACE | dg=BEGIN); _*; [_* / _* seq_expr . _*] @ THEN
+| (dp=LPAREN | db=LBRACKET | dbb=LBRACKETBAR | dc=LBRACE | dg=BEGIN); _*; [_* / _* fun_expr . _*] @ THEN
+  { match List.find_map (fun (pos, closer) -> Option.map (fun p -> p, closer) pos) [
+        $startpos(dp), ")";
+        $startpos(db), "]";
+        $startpos(dbb), "|]";
+        $startpos(dc), "}";
+        $startpos(dg), "end";
+      ] with
+    | Some (pos, closer) -> (pos, closer)
+    | None -> assert false }
+
+(* The innermost enclosing `let`. *)
+rule enclosing_let = parse error %partial
+| l=LET; _* { $startpos(l) }
+
+(* Whether the stack is inside the right-hand side of an arrow, e.g. a match
+   case. *)
+rule after_arrow = parse error %partial
+| MINUSGREATER; _* { () }
+
+(* An `if` or `while` whose condition, or a `for` whose bound, contains a
+   `;`: legal, but usually the sign of a missing `then` or `do`, the `;`
+   ending the branch or the body continues the condition. The keyword, the
+   position of the construct, the expression before the `;` and the
+   position of the `;`. *)
+rule header_sequence = parse error %partial
+| ( i=IF; ext_attributes
+  | w=WHILE; ext_attributes
+  | f=FOR; ext_attributes; pattern; EQUAL; seq_expr; direction_flag );
+  c=fun_expr; s=SEMI; _*
+  { match $startpos(i), $startpos(w), $startpos(f) with
+    | Some p, _, _ -> (`If, p, c, $startpos(s))
+    | _, Some p, _ -> (`While, p, c, $startpos(s))
+    | _, _, Some p -> (`For, p, c, $startpos(s))
+    | None, None, None -> assert false }
+
+rule error_messages = {
+  let inside_open_letop = ref false
+  (* The span of the expression after the nearest `=`, if any, and a
+     function computing it (see the reduction capture below). *)
+  let bound_expr = ref None
+
+  (* When the lookahead is a closing delimiter: the innermost unclosed
+     delimiter (see [nearest_opener]). *)
+  let opener = lazy (nearest_opener ())
+
+  (* The position of the lookahead, when it is a closing delimiter (see the
+     first clause). *)
+  let closer_pos = ref None
+
+  let contains s sub =
+    let n = String.length s and m = String.length sub in
+    let rec loop i = i + m <= n && (String.sub s i m = sub || loop (i + 1)) in
+    loop 0
+
+  (* A closing delimiter that closes none of the unclosed delimiters is
+     missing its opening delimiter: say so in all messages. (When it closes
+     an outer one, the messages report the inner ones as unclosed.) *)
+  let closer_hint msg =
+    match closing_delimiter token, !closer_pos with
+    | None, _ | _, None -> []
+    | Some _, Some _ when has_opener () <> None -> []
+    (* The missing opening delimiter is the `do` of a loop, which the message
+       already reports. *)
+    | Some "done", Some _ when contains msg "`do`" -> []
+    | Some closer, Some token_pos ->
+      match Lazy.force opener with
+      | Some (name, _, pos) ->
+        [ mkloc pos pos,
+          Printf.sprintf "this `%s` cannot close the `%s` opened here, and no \
+                          other delimiter is open for it: its opening \
+                          delimiter may be missing" closer name ]
+      | None when contains msg "does not close anything" -> []
+      | None ->
+        [ mkloc token_pos token_pos,
+          Printf.sprintf "this `%s` does not close anything; its opening \
+                          delimiter may be missing" closer ]
+
+  let is_infix op =
+    op <> "" && (match op.[0] with 'a'..'z' | '_' -> false | _ -> true)
+
+  (* An expression evaluated for its effect. *)
+  let rec is_statement (e : Parsetree.expression) =
+    match e.pexp_desc with
+    | Pexp_sequence _ | Pexp_for _ | Pexp_while _ | Pexp_setfield _
+    | Pexp_setinstvar _ -> true
+    | Pexp_apply ({pexp_desc = Pexp_ident {txt = Longident.Lident (":=" | "<-"); _}; _}, _) ->
+      true
+    | Pexp_apply ({pexp_desc = Pexp_ident {txt = Longident.Ldot (_, {txt = "set"; _}); _}; _}, _) ->
+      true
+    | Pexp_ifthenelse (_, e, None) -> is_statement e
+    | _ -> false
+
+  (* In the condition [c] of an `if` missing its `then`, the start of the
+     branch: the last argument of an application, at the right of the
+     condition, that looks like a statement, e.g. `if x > 0 (incr n; ...)`. *)
+  let rec branch_argument (c : Parsetree.expression) =
+    match c.pexp_desc with
+    | Pexp_apply ({pexp_desc = Pexp_ident {txt = Longident.Lident op; _}; _},
+                  [_; (_, rhs)]) when is_infix op -> branch_argument rhs
+    | Pexp_apply (_, args) ->
+      begin match List.rev args with
+        | (_, last) :: _ when is_statement last -> Some last.pexp_loc.loc_start
+        | _ -> None
+      end
+    | _ -> None
+
+  (* Inside the condition of an `if` or a loop continued by a `;`, the
+     error can be detected far from the missing `then` or `do`: say so in all
+     messages, unless they already point at it. *)
+  let header_hint msg sub =
+    match header_sequence () with
+    | None -> []
+    | Some (construct, pos, c, semi_pos) ->
+      let keyword, branch, header = match construct with
+        | `If -> "`then`", "branch of the `if`", "condition of the `if`"
+        | `While -> "`do`", "body of the `while`", "condition of the `while`"
+        | `For -> "`do`", "body of the `for`", "bound of the `for`"
+      in
+      if List.exists (fun (_, hint) -> contains hint keyword) sub then [] else
+        match branch_argument c with
+        | Some p ->
+          [ mkloc p p,
+            Printf.sprintf "%s is probably missing before this argument: it \
+                            looks like the %s, read as part of its %s"
+              keyword branch (if construct = `For then "bound" else "condition") ]
+        | None ->
+          [ mkloc semi_pos semi_pos,
+            Printf.sprintf "%s is probably missing before this `;`: it \
+                            continues the %s %s%s"
+              keyword header
+              (if pos.Lexing.pos_lnum = semi_pos.Lexing.pos_lnum
+               then "on the same line"
+               else "at line " ^ string_of_int pos.Lexing.pos_lnum)
+              (if contains msg keyword then "" else
+                 ", which swallows the following code") ]
+
+  let message ?(sub=[]) msg =
+    message ~sub:(sub @ header_hint msg sub @ closer_hint msg) msg
+  let some_message ?sub msg = Some (message ?sub msg)
+  let msgf ?sub fmt = Printf.ksprintf (fun msg -> message ?sub msg) fmt
+  let some_msgf ?sub fmt = Printf.ksprintf (fun msg -> some_message ?sub msg) fmt
+
+  (* An expression that could be the pattern of a definition: names,
+     constants, and tuples, records or constructors of them. *)
+  let rec looks_bound (e : Parsetree.expression) = match e.pexp_desc with
+    | Pexp_ident {txt = Longident.Lident _; _} | Pexp_constant _ -> true
+    | Pexp_tuple es -> List.for_all (fun (_, e) -> looks_bound e) es
+    | Pexp_record (fields, None) -> List.for_all (fun (_, e) -> looks_bound e) fields
+    | Pexp_construct (_, None) -> true
+    | Pexp_construct (_, Some e) | Pexp_constraint (e, _) -> looks_bound e
+    | _ -> false
+
+  let ident_name (e : Parsetree.expression) = match e.pexp_desc with
+    | Pexp_ident {txt = Longident.Lident x; _} -> Some x
+    | _ -> None
+
+  (* If [e] looks like the left-hand side of a definition (a pattern, or a
+     function applied to patterns): [Some name] with the defined name, if it
+     is a name or a function. *)
+  let definition_lhs (e : Parsetree.expression) =
+    match e.pexp_desc with
+    | _ when looks_bound e -> Some (ident_name e)
+    | Pexp_apply (f, args)
+      when ident_name f <> None && List.for_all (fun (_, a) -> looks_bound a) args ->
+      Some (ident_name f)
+    | _ -> None
+
+  (* A comparison [lhs = _] in [e], found by following the left operands of
+     infix operators, whose [lhs] looks like the left-hand side of a
+     definition. *)
+  let rec find_definition (e : Parsetree.expression) =
+    match e.pexp_desc with
+    | Pexp_apply ({pexp_desc = Pexp_ident {txt = Longident.Lident op; _}; _},
+                  [(_, lhs); _]) when is_infix op ->
+      begin match (if op = "=" then definition_lhs lhs else None) with
+        | Some name -> Some (lhs, name)
+        | None -> find_definition lhs
+      end
+    | _ -> None
+
+  (* Where a missing `then` probably belongs in the condition [c] of an
+     `if`: without it, the branch is read as arguments of an application in
+     the condition, starting on a new line (or as the rest of a sequence). *)
+  let rec missing_then (c : Parsetree.expression) =
+    match c.pexp_desc with
+    | Pexp_sequence (a, _) -> missing_then a
+    | _ -> split_at_line_break ~col:max_int c
+
+  (* The same for a missing `do` in a loop, whose [header] (the condition
+     of a `while`, the bound of a `for`) swallows the body. *)
+  let keyword_message ~keyword ~header msg (c : unit -> Parsetree.expression) =
+    let sub = match missing_then (c ()) with
+      | Some p ->
+        [ mkloc p p,
+          Printf.sprintf "%s is probably missing here: a line break does not \
+                          end the %s, the next line is read as an argument"
+            keyword header ]
+      | None | exception _ -> []
+    in
+    message msg ~sub
+
+  let then_message msg c =
+    keyword_message ~keyword:"`then`" ~header:"condition" msg c
+
+  (* In an application [f args] (and [rest], the start of a last argument
+     not yet reduced into [args]), the first argument that starts a new line, to the
+     left of [f]: that line was probably meant to start a new construct. *)
+  let newline_argument (f : Parsetree.expression) args rest =
+    let col = column f.pexp_loc.loc_start in
+    let rec go (prev : Lexing.position) = function
+      | [] -> None
+      | (start, stop) :: rest ->
+        if start.Lexing.pos_lnum > prev.Lexing.pos_lnum && column start <= col
+        then Some start
+        else go stop rest
+    in
+    let args = List.rev_map (fun (_, (a : Parsetree.expression)) ->
+        (a.pexp_loc.loc_start, a.pexp_loc.loc_end)) args in
+    let args = match rest with
+      | Some p -> args @ [(p, p)]
+      | None -> args
+    in
+    go f.pexp_loc.loc_end args
+
+  let comparison_message (lhs : Parsetree.expression) = function
+    | None -> None
+    | Some name ->
+      let start = lhs.pexp_loc.loc_start in
+      some_msgf "This `=` is read as a comparison, which cannot be followed by `in`; \
+                 if %s, `let` is missing"
+        (match name with
+         | Some x -> "`" ^ x ^ "` is meant to be defined"
+         | None -> "this is meant to be a definition")
+        ~sub:[ mkloc start start, "`let` is probably missing here" ]
+} parse error
+
+(**************************************************************)
+(* Hand-crafted part, fine-grained or specific error messages *)
+(**************************************************************)
+
+(* Remember the position of a closing delimiter, for [closer_hint]. *)
+| _ @ RPAREN, RBRACKET, RBRACE, BARRBRACKET, GREATERRBRACE, END, DONE
+  %partial { closer_pos := Some $startpos(token); None }
+
+| [_* /generic_constructor_declaration(BAR): BAR mkrhs(constr_ident) . generalized_constructor_arguments attributes]
+| [_* /generic_constructor_declaration(epsilon): epsilon mkrhs(constr_ident) . generalized_constructor_arguments attributes]
+  %partial {
+    match token with
+    | Parser.BARBAR | Parser.OF -> None
+    | _ ->
+      some_message "Expected `of` to introduce constructor arguments, or `:` for a GADT-style declaration"
+  }
+
+(* `let x = 1 in  y = 2 in ...`: without its `let`, a definition is read as
+   a comparison, and the error is only detected at its `in`, possibly far
+   from the mistake. The comparison is in the expression before the `in`,
+   its left operand looks like the left-hand side of a definition (see
+   [definition_lhs]):
+   - the `=` is still on the stack, after its left operand [l];
+   - or it is part of [l], e.g. `f x = a <> b && c` is read as
+     `((f x = a) <> b) && c` (see [find_definition]);
+   - or it is in the last element of a tuple: `a, b = c` is read as
+     `a, (b = c)`. *)
+| [seq_expr <- l=fun_expr; EQUAL; _*] @ IN
+| [fun_seq_expr <- l=fun_expr; EQUAL; _*] @ IN
+  %partial { comparison_message l (definition_lhs l) }
+
+| [seq_expr <- l=fun_expr; _*] @ IN
+| [fun_seq_expr <- l=fun_expr; _*] @ IN
+  %partial {
+    match find_definition l with
+    | Some (lhs, name) -> comparison_message lhs (Some name)
+    | None -> None
+  }
+
+| t=[seq_expr <- _*; COMMA; l=fun_expr; EQUAL; _*] @ IN
+| t=[fun_seq_expr <- _*; COMMA; l=fun_expr; EQUAL; _*] @ IN
+  %partial {
+    if looks_bound l then
+      let start = $startpos(t) in
+      some_message "This `=` is read as a comparison inside a tuple, which cannot \
+                    be followed by `in`; if this is meant to be a definition, \
+                    `let` is missing"
+        ~sub:[ mkloc start start, "`let` is probably missing here" ]
+    else None
+  }
+
+| e=fun_expr; SEMI @ ELSE
+  %partial { else_after_semicolon ~several:false e }
+
+(* The `;` may be followed by more expressions, meant to be part of the
+   `then` branch. Each depth is a separate clause, so that [e] is bound to
+   the expression right before the `;` that ended the `if`. *)
+| e=fun_expr; SEMI; [fun_expr] @ ELSE
+  %partial { else_after_semicolon ~several:true e }
+| e=fun_expr; SEMI; fun_expr; SEMI; [fun_expr] @ ELSE
+  %partial { else_after_semicolon ~several:true e }
+| e=fun_expr; SEMI; fun_expr; SEMI; fun_expr; SEMI; [fun_expr] @ ELSE
+  %partial { else_after_semicolon ~several:true e }
+
+(* `| A -> e` then, on the next line, `B -> e'`: without its `|`, the next
+   case is read as arguments of `e`, and the error is only detected at its
+   `->`. *)
+| [fun_expr <- f=simple_expr; args=reversed_nonempty_llist(labeled_simple_expr); r=_; _*]
+  @ MINUSGREATER, WHEN
+  %partial {
+    match newline_argument f args (Some $startpos(r)), after_arrow () with
+    | None, _ | _, None -> None
+    | Some p, Some () ->
+      some_message "Expected `|` to introduce another case, or the \
+                    match/function/try expression ends here"
+        ~sub:[ mkloc p p, "`|` is probably missing here: a line break does not \
+                           end an expression, the next line is read as arguments" ]
+  }
+
+(* A definition without its `let`, e.g. `f x : t = ...`: its line is read as
+   arguments of the previous expression, until the `:`. *)
+| [fun_expr <- f=simple_expr; args=reversed_nonempty_llist(labeled_simple_expr); r=_; _*]
+  @ COLON
+  %partial {
+    (* The new line must not be indented more than the enclosing `let`. *)
+    match newline_argument f args (Some $startpos(r)), enclosing_let () with
+    | None, _ | _, None -> None
+    | Some p, Some l when column p > column l -> None
+    | Some p, Some _ ->
+      some_message "A line break does not end an expression: the next line is \
+                    read as arguments, until this `:`; if it starts a new \
+                    definition, `let` is missing"
+        ~sub:[ mkloc p p, "`let` is probably missing here" ]
+  }
+
+(* `if c e1 else e2`: the `then` is missing, `e1` is read as part of the
+   condition. *)
+| IF; ext_attributes; c=[seq_expr] @ ELSE
+  { then_message "Expected `then` after the condition of this `if`, \
+                  before its `else`" c }
+
+(* `else` where no `if ... then ...` can take it. *)
+| / _* THEN . _* @ ELSE
+  { message "Expected an expression after `then`" }
+
+| t=THEN; _* @ ELSE
+  { message "This `else` cannot be attached to the `if ... then ...` expression"
+      ~sub:[ mkloc $startpos(t) $endpos(t),
+             "if the `then` branch contains `let`, `match` or `;`, \
+              wrap it in parentheses or `begin ... end`" ] }
+
+| _ @ ELSE
+  { message "`else` without a matching `if ... then ...`" }
+
+| [_* / _* seq_expr . _*] @ THEN
+| [_* / _* fun_expr . _*] @ THEN
+  %partial {
+    match unclosed_before_then () with
+    | Some (pos, closer) ->
+      some_msgf "Expected closing `%s` before `then`" closer
+        ~sub:[ mkloc pos pos, "opened here" ]
+    | None -> None }
+
+(* `then` after a complete expression: the `if` is missing, or the
+   condition already has its `then`. *)
+| [_* / _* seq_expr . _*] @ THEN
+| [_* / _* fun_expr . _*] @ THEN
+  { message "`then` without a matching `if`" }
+
+(* A list of type parameters that is not followed by the path of a type constructore *)
+(* (from "Misleading syntax error message for incorrect module definition", ocaml issue #12280) *)
+| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); RPAREN /atomic_type: LPAREN _ RPAREN . _*
+  %partial {
+    match List.rev typs with
+    | [] | [_] -> None
+    | typs ->
+      some_msgf
+        "Expected a type constructor after the parameters, for instance: %s.\n\
+         If you meant to write a tuple, use `*`: %s."
+        (Format.asprintf "%a" Pprintast.core_type
+           (Typ.constr (Location.mknoloc (Longident.Lident "t")) typs))
+        (Format.asprintf "%a" Pprintast.core_type
+           (Typ.tuple (List.map (fun t -> (None,t)) typs)))
+  }
+
+| LIDENT / label_declaration: mutable_flag _ . COLON _* @ EQUAL
+  { message "Expected `:` to declare the type of a record field, not `=`" }
+
+(* let x = 5 ; let y = 6 let z = 7 *)
+
+| [structure_item]; semi=SEMI; [let_bindings(ext) / _* . IN _*]
+  { message "Expected `in` to complete a local-let binding"
+      ~sub:[ mkloc $startpos(semi) $endpos(semi), "this semicolon may be the cause" ] }
+
+| loc=_ / fun_expr : _* . fun_expr; [let_bindings(ext)]
+  { message "Expected `in` after let-binding(s) in an expression"
+      ~sub:[ mkloc $startpos(loc) $endpos(loc), "this expression looks unterminated" ] }
+
+| item=structure_item; [let_bindings(ext)] @ IN
+  { message "A `let ... in` expression is not allowed immediately after a definition"
+      ~sub:[ mkloc $endpos(item) $endpos(item),
+             "insert `;;` or `let () = ` here to start a new expression" ] }
+
+(* Promoted ahead of the generic keyword-as-identifier rule below: a stray
+   `end`/`private`/etc. after `method` used to lose to that rule. *)
+| [_* /class_sig_field: METHOD attributes private_virtual_flags . mkrhs(label) COLON possibly_poly_type post_item_attributes]
+| [_* /method_: no_override_flag attributes virtual_with_private_flag . mkrhs(label) COLON possibly_poly_type]
+| [_* /method_: list(attribute) private_flag . LIDENT _*]
+  { message "Expected a method name after `method`" }
+
+(* A record type missing its `}`, followed by the next definition: after a
+   `;`, a keyword starting a definition is more likely meant as one than
+   as a field name. *)
+| lb=LBRACE; _*;
+  [_* /label_declaration: mutable_flag . LIDENT _*
+      /label_declaration_semi: mutable_flag . LIDENT _*
+   <- _*; SEMI]
+  @ LET, AND, TYPE, MODULE, OPEN, INCLUDE, EXCEPTION, EXTERNAL, CLASS, VAL, END
+  { let sub = [ mkloc $startpos(lb) $endpos(lb), "opened here" ] in
+    match Lexer.as_keyword token with
+    | Some kw ->
+      msgf ~sub "`%s` is a keyword and cannot be used as a field name; \
+                 if the record type ends here, its closing `}` is missing" kw
+    | None -> message ~sub "Expected a field name or closing `}` in the record type" }
+
+(* https://github.com/ocaml/ocaml/issues/11108
+   Report when a keyword has been typed in a context where a lowercase
+   identifier is expected. *)
+| [_* / _* _ . LIDENT _*]
+  %partial { match Lexer.as_keyword token with
+    | None -> None
+    | Some kw ->
+      some_msgf "`%s` is a keyword and cannot be used as an identifier here" kw
+  }
+
+(* https://github.com/ocaml/ocaml/issues/5068 *)
+(*| [_*  / _* _ . UIDENT _* |  _* / _* _ . TYPE _* | _* / _* _ . REC _*]
+  { message "Expected `type` or a module name beginning with an uppercase letter"} *)
+
+(* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
+| [_* / _* . seq_expr _*] @ MODULE
+  { message "`module` cannot appear in an expression position; \
+             use `(module M)` to pack a first-class module, \
+             or `let module M = ... in ...` to define a local module"
+  }
+
+(* https://github.com/ocaml/ocaml/issues/11445 *)
+
+| [constructor_arguments] @ MINUSGREATER
+  { message "In constructor arguments, arrow types must be wrapped in parentheses, \
+             e.g. `| C of (int -> int)` rather than `| C of int -> int`"
+  }
+
+| outer=constr_longident; inner=constr_longident;
+  [_ / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  %partial {
+    match outer, inner with
+    | Longident.Lident "()", _ | _, Longident.Lident "()" -> None
+    | _ -> some_message (report_curried_constructor ~outer inner token)
+  }
+
+(* Remember the expression after `=`: if a let-binding is missing its
+   `in`, an expression spanning several lines suggests where it should be. *)
+| EQUAL; loc=[seq_expr]
+  %partial { bound_expr := Some ($startpos(loc), $endpos(loc), loc); None }
+
+(* Remember if we are inside letop. *)
+| LETOP; val_ident; EQUAL; [simple_expr]
+  @ first(simple_expr)
+  %partial { inside_open_letop := true; None }
+
+| constr=constr_longident; [simple_expr]
+  @ first(simple_expr)
+  %partial {
+    match constr with
+    | Longident.Lident ("true" | "false") -> None
+    | _ ->
+      some_msgf
+        "Constructor arguments must be wrapped in parentheses and separated by \
+         commas, e.g. `%s (..., ...)`%s"
+        (longident_to_string constr)
+        (if !inside_open_letop then
+           " (this follows the right-hand side of a `let`/`let*` \
+            binding, so `in` may be missing)"
+         else "")
+  }
+
+| LET; ext; attributes; rec_flag; inner=constr_longident;
+  [_* / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+| AND; attributes; inner=constr_longident;
+  [_* / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  %partial {
+    match inner with
+    | Longident.Lident "()" -> None
+    | _ -> some_message (report_curried_constructor inner token)
+  }
+
+| inner=constr_longident;
+  [_* / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  %partial {
+    match inner with
+    | Longident.Lident "()" -> None
+    | _ ->
+      some_message (report_curried_constructor inner token ^
+                    " (or, if this pattern is meant to end here, `->` may be missing)")
+  }
+
+(* Operators that look like the expected keyword-like symbol. When the
+   operator could be read as a binary operator, it would have been accepted,
+   so these only fire where `=` or `->` is the actual syntax. *)
+| [_* / _* . MINUSGREATER _*] @ INFIXOP0
+  %partial {
+    match token with
+    | INFIXOP0 "=>" -> some_message "Expected `->`, not `=>`"
+    | _ -> None
+  }
+
+| [_* / _* . EQUAL _*] @ INFIXOP0, COLONEQUAL
+  %partial {
+    match token with
+    | INFIXOP0 "==" ->
+      some_message "Expected `=`, not `==` (which is physical equality)"
+    | COLONEQUAL ->
+      some_message "Expected `=`, not `:=` (which assigns to a reference)"
+    | _ -> None
+  }
+
+(* `type T = ...`: an uppercase identifier after `type` is only accepted as
+   the beginning of a type path in a type extension, `type M.t += ...`. *)
+| TYPE; ext; attributes; NONREC?; type_parameters;
+  id=UIDENT /mk_longident(mod_ext_longident,UIDENT): UIDENT .
+  %partial {
+    match token with
+    | DOT | LPAREN -> None
+    | _ ->
+      some_msgf "Type names must start with a lowercase letter \
+                 (`%s` can only begin a module path here)" id
+  }
+
+(* `module m = ...`: lowercase identifiers are never module names. *)
+| [_* / _* . module_name _*] @ LIDENT
+  { message "Module names must start with an uppercase letter" }
+
+(* `type t = foo of int`: `of` only follows a constructor name. *)
+| EQUAL; PRIVATE?; id=LIDENT /mk_longident(mod_ext_longident,LIDENT): LIDENT . @ OF
+  { msgf "Constructor names must start with an uppercase letter \
+          (`%s` is read as a type name)" id }
+
+(* `type t = list<int>`: type arguments come first. *)
+| id=LIDENT /mk_longident(mod_ext_longident,LIDENT): LIDENT . @ LESS
+  { msgf "Type arguments are written before the type name, e.g. `int %s`, \
+          not `%s<int>`" id id }
+
+| m=mod_ext_longident; DOT; id=LIDENT
+  /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident DOT LIDENT . @ LESS
+  { let id = longident_to_string m ^ "." ^ id in
+    msgf "Type arguments are written before the type name, e.g. `int %s`, \
+          not `%s<int>`" id id }
+
+(* `type t = |` is a complete (empty) variant: what follows the `|` was
+   meant to be a constructor. *)
+| /constructor_declarations: BAR . @ LIDENT
+  { message "Constructor names must start with an uppercase letter" }
+
+| /constructor_declarations: BAR . @ OF, COLON
+  { message "Expected a constructor name after `|`" }
+
+(* `{ a : 1 }`: a type constraint is syntactically possible there, but the
+   value was most likely meant. *)
+| l=label_longident; COLON /type_constraint: COLON . core_type _*
+  { msgf "Expected a type after `:`; record fields are given a value \
+          with `=`, e.g. `{ %s = ... }`" (longident_to_string l) }
+
+(* `[1, 2, ]`: commas in a list build a tuple. *)
+| LBRACKET; (fun_expr | reversed_labeled_tuple_body); COMMA
+  /reversed_labeled_tuple_body: _* COMMA . fun_expr
+| LBRACKETBAR; (fun_expr | reversed_labeled_tuple_body); COMMA
+  /reversed_labeled_tuple_body: _* COMMA . fun_expr
+  { message "Expected an expression after `,` (elements of lists and arrays \
+             are separated by `;`, not `,`)" }
+
+| / . atomic_type @ LBRACKETATAT
+  { message "`[@@ ...]` attributes should be placed after a type \
+             (note that the attribute attaches to the item, not to the type)" }
+
+| / . atomic_type @ LBRACKETAT
+  { message "`[@ ...]` attributes should be placed after a type" }
+
+(************************************************)
+(* Coarse-grained but exhaustive error messages *)
+(************************************************)
+
+| /ext: PERCENT . attr_id
+| /fun_seq_expr: fun_expr SEMI PERCENT . attr_id seq_expr
+| /no_ext: PERCENT . attr_id
+  { message "Expected an extension name after `%`" }
+
+| /attr_id: single_attr_id DOT . attr_id
+  { message "Expected an identifier after `.` in attribute path" }
+
+| /attribute: LBRACKETAT . attr_id attr_payload RBRACKET
+  { message "Expected an attribute name after `[@`" }
+
+| [_* /value_description: VAL ext attributes . mkrhs(val_ident) COLON possibly_poly(core_type) post_item_attributes]
+| [_* /value_type: mutable_virtual_flags . mkrhs(label) COLON core_type]
+| [_* /value: list(attribute) mutable_flag . LIDENT _*]
+  { message "Expected a value name after `val`" }
+
+(* `||` where `|` was meant between constructors. Anchored on the
+   constructor-declaration context: the same module-path state is also
+   reached in a type position (e.g. `(e :> M || ...)`), where a `|` would
+   make no sense. *)
+| [_* /constr_ident: UIDENT .] @ BARBAR
+| [_* /reversed_bar_llist(constructor_declaration): reversed_bar_llist(constructor_declaration) . generic_constructor_declaration(BAR)]
+  @ BARBAR
+  { message "Expected `|` (a single pipe) to introduce another variant constructor, not `||`" }
+
+| [_* /atomic_type: mod_ext_longident . DOT delimited_type_supporting_local_open
+      /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
+      /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
+  { message "Expected `.` after the module name: a type is named by a \
+             lowercase identifier, possibly qualified, e.g. `M.t`" }
+
+| /operator: DOTOP . LPAREN _*
+  /operator: DOTOP . LBRACKET _*
+  /operator: DOTOP . LBRACE _*
+  { message "Expected `(`, `[`, or `{` after a `.<op>` operator" }
+
+| /index_mod: SEMI . DOTDOT
+  { message "Expected `..` after `;` in an index operator" }
+
+| lp=LPAREN; [_* /operator: DOTOP LPAREN index_mod . RPAREN _*]
+  { message "Expected closing `)` in index operator"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lb=LBRACKET; [_* /operator: DOTOP LBRACKET index_mod . RBRACKET _*]
+  { message "Expected closing `]` in index operator"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lc=LBRACE; [_* /operator: DOTOP LBRACE index_mod . RBRACE _*]
+  { message "Expected closing `}` in index operator"
+      ~sub:[ mkloc $startpos(lc) $endpos(lc), "opened here" ] }
+
+| lp=LPAREN; [_* /val_extra_ident: LPAREN operator . RPAREN]
+  { message "Expected closing `)` after the operator in a value identifier"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| [_* /value_description: VAL ext attributes mkrhs(val_ident) . COLON possibly_poly(core_type) post_item_attributes]
+| /value_type: mutable_virtual_flags mkrhs(label) . COLON core_type
+  { message "Expected `:` after the value name" }
+
+| /value_description: VAL ext attributes mkrhs(val_ident) COLON . possibly_poly(core_type) post_item_attributes
+  { message "Expected a type annotation after `:`" }
+
+| /atomic_type: QUOTE . ident
+  /reversed_nonempty_llist(typevar): QUOTE . ident
+| /atomic_type: QUOTE . ident
+| /type_variable: QUOTE . ident
+| /reversed_nonempty_llist(typevar): reversed_nonempty_llist(typevar) QUOTE . ident
+| /alias_type: alias_type AS QUOTE . ident
+  { message "Expected a type variable name after `'`" }
+
+| /optlabel: QUESTION . LIDENT COLON
+  { message "Expected a label name after `?`" }
+
+| /optlabel: QUESTION LIDENT . COLON
+  { message "Expected `:` after the optional label name" }
+
+| /actual_type_parameters: LPAREN . separated_nontrivial_llist(COMMA,core_type) _*
+  /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_ident: LPAREN . COLONCOLON RPAREN
+  /delimited_type_supporting_local_open: LPAREN . core_type RPAREN
+  /delimited_type_supporting_local_open: LPAREN . MODULE ext_attributes package_type_ RPAREN
+  { message "Expected a type, `module`, or `::)` after `(`" }
+
+| /actual_type_parameters: LPAREN . separated_nontrivial_llist(COMMA,core_type) _*
+  /delimited_type_supporting_local_open: LPAREN . core_type RPAREN
+  /delimited_type_supporting_local_open: LPAREN . MODULE ext_attributes package_type_ RPAREN
+| /delimited_type_supporting_local_open: LPAREN . core_type RPAREN
+  /delimited_type_supporting_local_open: LPAREN . MODULE ext_attributes package_type_ RPAREN
+  { message "Expected a type or `module` after `(`" }
+
+| /class_self_type: LPAREN . core_type RPAREN
+  { message "Expected a type after `(`" }
+
+| lp=LPAREN; MODULE; _*;
+  [_* /delimited_type_supporting_local_open: LPAREN MODULE ext_attributes . package_type_ RPAREN]
+  { message "Expected a module type after `module` in a parenthesized type"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN; [_* /type_parameters: LPAREN separated_nonempty_llist(COMMA,type_parameter) . RPAREN]
+  { message "Expected closing `)` in type parameters"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /type_kind: EQUAL . nonempty_type_kind
+  { message "Expected a type definition after `=`" }
+
+| /nonempty_type_kind: PRIVATE . core_type
+  /nonempty_type_kind: PRIVATE . constructor_declarations
+  /nonempty_type_kind: PRIVATE . DOTDOT
+  /nonempty_type_kind: PRIVATE . LBRACE label_declarations RBRACE
+  { message "Expected a type after `private`" }
+
+(* New in 5.5.1: `type t = external "name"` (an externally-implemented
+   type, e.g. for an FFI type known only by name). *)
+| /nonempty_type_kind: EXTERNAL . STRING
+  { message "Expected a quoted external name after `external`" }
+
+| /function_type: LIDENT COLON . tuple_type MINUSGREATER function_type
+  /function_type: LIDENT COLON . atomic_type _*
+  { message "Expected a type after `:` in a function type" }
+
+| /object_type: LESS . meth_list GREATER
+  /object_type: LESS . GREATER
+  { message "Expected a method list or `>` after `<`" }
+
+| /meth_list: LIDENT COLON . possibly_poly(core_type_no_attr) _*
+| /method_: override_flag attributes private_flag mkrhs(label) COLON . _*
+  { message "Expected a type after `:` in a method" }
+
+| /extension: LBRACKETPERCENT . attr_id payload RBRACKET
+  { message "Expected an extension name after `[%`" }
+
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /local_structure_item: TYPE ext list(attribute) NONREC type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
+  { message "Expected a type name after `type nonrec`" }
+
+| /post_item_attribute: LBRACKETATAT . attr_id attr_payload RBRACKET
+  { message "Expected an attribute name after `[@@`" }
+
+| [_* /fun_expr_attrs: TRY ext_attributes . seq_expr WITH match_cases]
+  { message "Expected an expression after `try`" }
+
+| /reversed_labeled_tuple_body: TILDE . _*
+| /simple_param_pattern: TILDE . LPAREN label_let_pattern RPAREN
+  /simple_param_pattern: TILDE . LIDENT
+  { message "Expected a parameter name or `(` after `~`" }
+
+| /labeled_simple_expr: TILDE LPAREN . LIDENT type_constraint RPAREN
+| /reversed_labeled_tuple_body: TILDE LPAREN . LIDENT _*
+| /labeled_tuple_pat_element_list(pattern): TILDE LPAREN . LIDENT _*
+  /reversed_labeled_tuple_pattern(pattern): TILDE LPAREN . LIDENT COLON core_type RPAREN COMMA DOTDOT
+| /labeled_tuple_pat_element_list(pattern_no_exn): TILDE LPAREN . LIDENT _*
+  /reversed_labeled_tuple_pattern(pattern_no_exn): TILDE LPAREN . LIDENT COLON core_type RPAREN COMMA DOTDOT
+  { message "Expected a parameter name after `~(`" }
+
+| /reversed_labeled_tuple_body: TILDE LPAREN LIDENT . type_constraint _*
+| /labeled_simple_expr: TILDE LPAREN LIDENT . type_constraint RPAREN
+| /reversed_labeled_tuple_body: LABEL simple_expr COMMA TILDE LPAREN LIDENT . type_constraint RPAREN
+  /reversed_labeled_tuple_body: TILDE LPAREN LIDENT . type_constraint _*
+  { message "Expected a type constraint (e.g. `: int`) after the parameter name" }
+
+| /type_constraint: COLONGREATER . core_type
+| /type_constraint: COLON core_type COLONGREATER . core_type
+  { message "Expected a type after `:>`" }
+
+| [_* /\_: LBRACKETLESS option(BAR) . row_field_list _*]
+  { message "Expected a row field after `[<` or `|`" }
+
+| [_* /\_: LBRACKETGREATER option(BAR) . row_field_list RBRACKET]
+  { message "Expected a row field after `[>` or `|`" }
+
+| /atomic_type: HASH . clty_longident
+| /atomic_type: atomic_type HASH . clty_longident
+  { message "Expected a class type after `#`" }
+
+| /mod_ext_longident: mod_ext_longident LPAREN . mod_ext_longident RPAREN
+  { message "Expected a module expression after `(`" }
+
+| lp=LPAREN;
+  [_* /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT
+      /mod_ext_longident: mod_ext_longident LPAREN mod_ext_longident . RPAREN]
+| lp=LPAREN;
+  [_* /paren_module_expr: LPAREN module_expr . COLON module_type RPAREN
+      /paren_module_expr: LPAREN module_expr . RPAREN]
+| lp=LPAREN; _*;
+  [_* /simple_expr_attrs: LPAREN MODULE ext_attributes module_expr . RPAREN
+      /simple_expr_attrs: LPAREN MODULE ext_attributes module_expr . COLON package_type_ RPAREN]
+  { message "Expected closing `)` after the module expression"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /\_: LBRACKET BAR . row_field_list RBRACKET
+| /reversed_separated_nonempty_llist(BAR,row_field): reversed_separated_nonempty_llist(BAR,row_field) BAR . row_field
+| /\_: LBRACKET row_field BAR . row_field_list RBRACKET
+  { message "Expected a row field after `|`" }
+
+| /name_tag: BACKQUOTE . ident
+  { message "Expected an identifier after `` ` ``" }
+
+| /generalized_constructor_arguments: COLON typevar_list DOT constructor_arguments MINUSGREATER . atomic_type
+| /generalized_constructor_arguments: COLON constructor_arguments MINUSGREATER . atomic_type
+(* A parameter type, unlabeled or labeled: a tuple type, a polymorphic type
+   `('a 'b. 'a -> 'b)`, or a first-class module `(module M : S)`. *)
+| /function_type: _* MINUSGREATER . function_type
+  { message "Expected a type after `->`" }
+
+| [_* /function_type: optlabel . tuple_type MINUSGREATER function_type]
+  { message "Expected a parameter type after the optional label" }
+
+| [_* /function_type: optlabel tuple_type . MINUSGREATER function_type]
+  { message "Expected `->` after the parameter type" }
+
+| /tuple_type: atomic_type STAR . reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element)
+| /reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element): reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element) STAR . atomic_type
+  /reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element): reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element) STAR . LIDENT COLON atomic_type
+| /function_type: LIDENT COLON atomic_type STAR . reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element) _*
+  /tuple_type: atomic_type STAR . reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element)
+  { message "Expected a tuple element after `*`" }
+
+| /labeled_tuple_typ_element: LIDENT COLON . atomic_type
+  { message "Expected a type after `:` in a labeled tuple element" }
+
+| /alias_type: alias_type AS . QUOTE ident
+  { message "Expected a type variable after `as`" }
+
+| lp=LBRACKET; BAR;
+  [_* /\_: LBRACKET BAR row_field_list . RBRACKET]
+  { message "Expected closing `]` after the row type"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| [_* /tag_field: mkrhs(name_tag) OF opt_ampersand . amper_type_list attributes]
+  { message "Expected a type after `of` in a variant tag" }
+
+| /reversed_separated_nonempty_llist(AMPERSAND,core_type_no_attr): reversed_separated_nonempty_llist(AMPERSAND,core_type_no_attr) AMPERSAND . alias_type
+  { message "Expected a type after `&` in a constrained type" }
+
+(* `[ `A ]` is a valid exact variant type, but `[ t ]` (inheriting from a
+   type) is not: closing the bracket is only possible after a tag. *)
+| [_* /delimited_type_supporting_local_open: LBRACKET tag_field . RBRACKET]
+  { message "Expected `|` (for another field) or closing `]` after a row field" }
+
+| [_* /\_: LBRACKET row_field . BAR row_field_list RBRACKET]
+  { message "Expected `|` after the row field: a type can only be included \
+             in a variant type with other fields, e.g. `[ t | `A ]`" }
+
+| lb=LBRACKET; _*;
+  [_* /\_: LBRACKET row_field BAR row_field_list . RBRACKET]
+  { message "Expected closing `]` to close the row type"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACKETGREATER; _*;
+  [_* /\_: LBRACKETGREATER option(BAR) row_field_list . RBRACKET]
+  { message "Expected closing `]` after the object row type"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACKETLESS; _*;
+  [_* /\_: LBRACKETLESS option(BAR) row_field_list . RBRACKET
+      / LBRACKETLESS option(BAR) row_field_list . GREATER name_tag_list RBRACKET]
+  { message "Expected closing `]` or `>` after the object row type"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| /\_: LBRACKETLESS option(BAR) row_field_list GREATER . name_tag_list RBRACKET
+  { message "Expected a name tag after `>`" }
+
+| lb=LBRACKETLESS; _*;
+  [_* /\_: LBRACKETLESS option(BAR) row_field_list GREATER name_tag_list . RBRACKET]
+  { message "Expected closing `]` after the object type with name tags"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| /let_binding_body_no_punning: let_ident COLON . poly(core_type) EQUAL seq_expr
+  /let_binding_body_no_punning: let_ident COLON . TYPE lident_list DOT core_type EQUAL seq_expr
+  /type_constraint: COLON . core_type _*
+  { message "Expected a type annotation after `:` in a let-binding" }
+
+| /type_constraint: COLON . core_type _*
+| /option(preceded(COLON,core_type)): COLON . core_type
+| /option(preceded(COLON,atomic_type)): COLON . atomic_type
+  { message "Expected a type after `:`" }
+
+| lp=LPAREN; LIDENT; [_* /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint . RPAREN _*]
+| lp=LPAREN; [_* /simple_param_pattern: TILDE LPAREN label_let_pattern . RPAREN]
+  { message "Expected closing `)` after the labeled parameter"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+(* Only `,` can follow: a labeled tuple has at least two components. *)
+| /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint RPAREN . COMMA _*
+  { message "Expected `,` after the labeled tuple component" }
+
+(* All tuples go through [reversed_labeled_tuple_body], labeled or not:
+   don't mention labels, they are the uncommon case. *)
+| /reversed_labeled_tuple_body: _* COMMA . labeled_tuple_element
+  { match closing_delimiter token with
+    | Some _ ->
+      message "Expected an expression after `,` in a tuple \
+               (a tuple cannot end with a trailing comma)"
+    | None -> message "Expected an expression after `,` in a tuple" }
+
+| /simple_expr: PREFIXOP . simple_expr
+  { message "Expected an expression after the prefix operator" }
+
+| lp=LPAREN /class_self_pattern: LPAREN . pattern _*
+  { message "Expected a pattern after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /reversed_labeled_tuple_pattern(pattern): TILDE . _*
+| /reversed_labeled_tuple_pattern(pattern_no_exn): TILDE . _*
+  { message "Expected a labeled pattern after `~`" }
+
+| /labeled_tuple_pat_element_noprec(pattern): TILDE LPAREN LIDENT . COLON _*
+| /labeled_tuple_pat_element_noprec(pattern_no_exn): TILDE LPAREN LIDENT . COLON _*
+  { message "Expected a type annotation (e.g. `: int`) after the parameter name" }
+
+| /labeled_tuple_pat_element_noprec(pattern): TILDE LPAREN LIDENT COLON . core_type _*
+| /labeled_tuple_pat_element_noprec(pattern_no_exn): TILDE LPAREN LIDENT COLON . core_type _*
+  { message "Expected a type after `:` in a labeled pattern" }
+
+| lp=LPAREN; LIDENT; COLON;
+  [_* /labeled_tuple_pat_element_noprec(pattern): TILDE LPAREN LIDENT COLON core_type . RPAREN _*]
+| lp=LPAREN; LIDENT; COLON;
+  [_* /labeled_tuple_pat_element_noprec(pattern_no_exn): TILDE LPAREN LIDENT COLON core_type . RPAREN _*]
+  { message "Expected closing `)` after the type constraint"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /labeled_tuple_pat_element_list(pattern): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA _*
+  /reversed_labeled_tuple_pattern(pattern): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA DOTDOT
+| /labeled_tuple_pat_element_list(pattern_no_exn): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA _*
+  /reversed_labeled_tuple_pattern(pattern_no_exn): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA DOTDOT
+| [_* /labeled_tuple_pat_element_list(pattern): LABEL simple_pattern . COMMA _*
+      /reversed_labeled_tuple_pattern(pattern): LABEL simple_pattern . COMMA DOTDOT]
+| [_* /labeled_tuple_pat_element_list(pattern_no_exn): LABEL simple_pattern . COMMA _*
+      /reversed_labeled_tuple_pattern(pattern_no_exn): LABEL simple_pattern . COMMA DOTDOT]
+  { message "Expected `,` after the labeled pattern" }
+
+| /labeled_tuple_pat_element_list(pattern): _* COMMA . pattern
+  /labeled_tuple_pat_element_list(pattern): _* COMMA . LABEL simple_pattern
+  /labeled_tuple_pat_element_list(pattern): _* COMMA . TILDE _*
+  /reversed_labeled_tuple_pattern(pattern): _* COMMA . DOTDOT
+| /labeled_tuple_pat_element_list(pattern_no_exn): _* COMMA . pattern_no_exn
+  /labeled_tuple_pat_element_list(pattern_no_exn): _* COMMA . LABEL simple_pattern
+  /labeled_tuple_pat_element_list(pattern_no_exn): _* COMMA . TILDE _*
+  /reversed_labeled_tuple_pattern(pattern_no_exn): _* COMMA . DOTDOT
+  { message "Expected a pattern after `,` in a labeled tuple pattern" }
+
+(* `let f x y x + y`: the `=` is missing, and the `+` (or `-`) of the
+   body was read as the sign of a constant pattern among the parameters. *)
+| FUN; ext_attributes; reversed_nonempty_concat(fun_param_as_list);
+  op=PLUS /signed_constant: PLUS . _
+| FUN; ext_attributes; reversed_nonempty_concat(fun_param_as_list);
+  op=MINUS /signed_constant: MINUS . _
+  { message "Expected `->` after the function parameters"
+      ~sub:[ mkloc $startpos(op) $endpos(op),
+             "this sign is read as part of a constant pattern (like `-1`), \
+              not as an operator of the function body" ] }
+
+| reversed_nonempty_concat(fun_param_as_list); op=PLUS /signed_constant: PLUS . _
+| reversed_nonempty_concat(fun_param_as_list); op=MINUS /signed_constant: MINUS . _
+  { message "Expected `=` after the function parameters"
+      ~sub:[ mkloc $startpos(op) $endpos(op),
+             "this sign is read as part of a constant pattern (like `-1`), \
+              not as an operator of the function body" ] }
+
+| /signed_constant: PLUS . INT
+  /signed_constant: PLUS . FLOAT
+  { message "Expected a number after `+`" }
+
+| /signed_constant: MINUS . INT
+  /signed_constant: MINUS . FLOAT
+  { message "Expected a number after `-`" }
+
+| lp=LPAREN; MODULE; _*;
+  [_* /simple_pattern_not_ident: LPAREN MODULE ext_attributes . mkrhs(module_name) _*]
+  { message "Expected a module name after `module` in a parenthesized pattern"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN; MODULE; _*;
+  [_* /simple_pattern_not_ident: LPAREN MODULE ext_attributes mkrhs(module_name) . RPAREN
+      /simple_pattern_not_ident: LPAREN MODULE ext_attributes mkrhs(module_name) . COLON package_type_ RPAREN]
+  { message "Expected closing `)` after the module pattern"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /simple_pattern_not_ident: LPAREN MODULE ext_attributes mkrhs(module_name) COLON . package_type_ RPAREN
+  { message "Expected a module type after `:` in a parenthesized module pattern" }
+
+(* First-class-module parameter type, e.g. `(module M : S) -> t`, both
+   unlabeled and labeled. *)
+| id=UIDENT; COLON;
+  /\_: _* MODULE ext_attributes mkrhs(UIDENT) COLON . package_type_ _*
+  { msgf "Expected a module type after `:` in a `(module %s : ...)` parameter" id }
+
+| /module_type: MODULE . TYPE OF attributes module_expr
+  { message "Expected `type` after `module` in a module type" }
+
+| /module_type: MODULE TYPE . OF attributes module_expr
+  { message "Expected `of` after `module type`" }
+
+| [_* /module_type: MODULE TYPE OF attributes . module_expr]
+  { message "Expected a module expression after `of`" }
+
+| [_* /open_declaration: OPEN BANG ext list(attribute) . module_expr list(post_item_attribute)]
+  { message "Expected a module expression after `open !`" }
+
+| lp=LPAREN;
+  /module_expr: module_expr LPAREN . RPAREN
+  /paren_module_expr: LPAREN . module_expr _*
+  /paren_module_expr: LPAREN . VAL _*
+  { message "Expected a module expression, `val`, or `)` after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN;
+  /paren_module_expr: LPAREN . module_expr _*
+  /paren_module_expr: LPAREN . VAL _*
+  { message "Expected a module expression or `val` after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN; VAL;
+  [_* /paren_module_expr: LPAREN VAL attributes . expr_colon_package_type _*]
+  { message "Expected a package expression after `val`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| [_* /simple_expr_attrs: NEW ext_attributes . mkrhs(class_longident)]
+  { message "Expected a class name after `new`" }
+
+| /simple_expr: METAOCAML_ESCAPE . simple_expr
+  { message "Expected an expression after the escape operator" }
+
+| /simple_expr: METAOCAML_BRACKET_OPEN . seq_expr METAOCAML_BRACKET_CLOSE
+  { message "Expected an expression after the bracket-open operator" }
+
+| [_* /fun_expr_attrs: MATCH ext_attributes . seq_expr WITH match_cases]
+  { message "Expected an expression after `match`" }
+
+| lp=LPAREN; /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_longident: LPAREN . COLONCOLON RPAREN
+  /simple_expr: LPAREN . seq_expr _*
+  /simple_expr: LPAREN . MODULE _*
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected an expression, `module`, `)`, or `::)` after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN; /constr_longident: mod_longident DOT LPAREN . COLONCOLON RPAREN
+  /simple_expr: mod_longident DOT LPAREN . seq_expr RPAREN
+  /simple_expr: mod_longident DOT LPAREN . RPAREN
+  /simple_expr_: open_dot_declaration DOT LPAREN . MODULE ext_attributes module_expr COLON package_type_ RPAREN
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected an expression, `module`, operator, `)`, or `::)` after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lb=LBRACKETBAR;
+  /simple_expr_: LBRACKETBAR . expr_semi_list BARRBRACKET
+  /simple_expr: LBRACKETBAR . BARRBRACKET
+| lb=LBRACKETBAR;
+  /simple_expr_: open_dot_declaration DOT LBRACKETBAR . expr_semi_list BARRBRACKET
+  /simple_expr: mod_longident DOT LBRACKETBAR . BARRBRACKET
+  { message "Expected an expression list or `|]` after `[|`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| [_* /fun_expr: simple_expr reversed_nonempty_llist(labeled_simple_expr) .
+      /reversed_nonempty_llist(labeled_simple_expr): reversed_nonempty_llist(labeled_simple_expr) . labeled_simple_expr]
+  @ LESSMINUS
+  { message "`<-` can only assign to a record field (like `r.field <- v`) \
+             or an indexing operation (like `a.(i) <- v`), not to a function application" }
+
+| [_* /fun_expr: simple_expr DOT label_longident . LESSMINUS fun_expr
+      /fun_expr: simple_expr DOT label_longident . LESSMINUS FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case)
+      /simple_expr: simple_expr DOT label_longident .]
+  @ MINUSGREATER
+  { message "Expected `<-` (not `->`) to assign to this mutable field" }
+
+| /fun_expr: _* LESSMINUS . _*
+  { message "Expected an expression after `<-`" }
+
+| /fun_expr: LETOP . letop_bindings IN seq_expr
+  { message "Expected let-bindings after `let<op>`" }
+
+| lb=LBRACKETBAR;
+  /\_: LBRACKETBAR . pattern_semi_list BARRBRACKET
+  /simple_delimited_pattern: LBRACKETBAR . BARRBRACKET
+  { message "Expected a pattern list or `|]` after `[|`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACKET;
+  /constr_extra_nonprefix_ident: LBRACKET . RBRACKET
+  /\_: LBRACKET . pattern_semi_list RBRACKET
+| lb=LBRACKET;
+  /\_: LBRACKET . pattern_semi_list RBRACKET
+  /simple_pattern_not_ident: mod_longident DOT LBRACKET . RBRACKET
+  { message "Expected a pattern list or `]` after `[`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACE;
+  /\_: LBRACE . record_pat_content RBRACE
+  { message "Expected a record pattern after `{`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACE;
+  [_* /\_: LBRACE record_pat_content . RBRACE]
+  { message "Expected closing `}` after the record pattern"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| /option(preceded(EQUAL,pattern)): EQUAL . pattern
+  { message "Expected a pattern after `=` in a record pattern" }
+
+| [_* /pattern_gen: LAZY ext_attributes . simple_pattern]
+  { message "Expected a pattern after `lazy`" }
+
+| /simple_pattern_not_ident: HASH . type_longident
+  { message "Expected a type path after `#` in a pattern" }
+
+| /simple_pattern_not_ident: signed_constant DOTDOT . signed_constant
+  { message "Expected another constant after `..` in a range pattern" }
+
+(* `let f x  M.g y`: without its `=` (or `->`), the expression is parsed as
+   a pattern, where a lowercase name cannot follow `M.`. *)
+| m=mod_longident; DOT /simple_pattern_not_ident: mod_longident DOT . simple_delimited_pattern
+  @ LIDENT
+  %partial {
+    match token with
+    | LIDENT x ->
+      some_msgf "Expected a constructor, pattern, `(`, or `[` after `.`: \
+                 `%s.%s` is not a pattern; if it is meant as an expression, \
+                 `=` or `->` may be missing before it"
+        (longident_to_string m) x
+    | _ -> None
+  }
+
+| /constr_longident: mod_longident DOT . LPAREN COLONCOLON RPAREN
+  /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+  /simple_pattern_not_ident: mod_longident DOT . simple_delimited_pattern
+  /simple_pattern_not_ident: mod_longident DOT . LBRACKET RBRACKET
+  /simple_pattern_not_ident: mod_longident DOT . LPAREN _*
+  { message "Expected a constructor, pattern, `(`, or `[` after `.`" }
+
+| /constr_longident: mod_longident DOT LPAREN . COLONCOLON RPAREN
+  /simple_pattern_not_ident: mod_longident DOT LPAREN . RPAREN
+  /simple_pattern_not_ident: mod_longident DOT LPAREN . pattern RPAREN
+  { message "Expected a pattern, `)`, or `::)` after `(`" }
+
+| /labeled_tuple_pat_element_noprec(pattern): LABEL . simple_pattern _*
+| /labeled_tuple_pat_element_noprec(pattern_no_exn): LABEL . simple_pattern _*
+  { message "Expected a pattern after the label" }
+
+| [_* /pattern: EXCEPTION ext_attributes . pattern]
+  { message "Expected a pattern after `exception`" }
+
+| /pattern: EFFECT . pattern_gen COMMA simple_pattern
+  { message "Expected a pattern after `effect`" }
+
+| [_* /pattern: EFFECT pattern_gen . COMMA simple_pattern]
+  { message "Expected `,` after the pattern in an effect pattern" }
+
+| /pattern: EFFECT pattern_gen COMMA . simple_pattern
+  { message "Expected a simple pattern after `,` in an effect pattern" }
+
+| /pattern: pattern COLONCOLON . pattern
+  { message "Expected a pattern after `::`" }
+
+| /pattern: pattern BAR . pattern
+  { message "Expected a pattern after `|`" }
+
+| /pattern: pattern AS . val_ident
+  { message "Expected a variable name after `as`" }
+
+| lp=LPAREN;
+  /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_longident: LPAREN . COLONCOLON RPAREN
+  /\_: mkrhs(constr_longident) LPAREN . TYPE lident_list RPAREN simple_pattern
+  /simple_pattern_not_ident: LPAREN . pattern RPAREN
+  /simple_pattern_not_ident: LPAREN . MODULE _*
+  /simple_pattern_not_ident: LPAREN . pattern COLON core_type RPAREN
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected a pattern, module, type, or operator after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /\_: mkrhs(constr_longident) LPAREN TYPE . lident_list RPAREN simple_pattern
+  { message "Expected a type parameter after `type` in a constructor pattern" }
+
+| lp=LPAREN; TYPE;
+  [_* / mkrhs(constr_longident) LPAREN TYPE lident_list . RPAREN simple_pattern]
+  { message "Expected closing `)` after the type parameters in a constructor pattern"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /\_: mkrhs(constr_longident) LPAREN TYPE lident_list RPAREN . simple_pattern
+  { message "Expected a pattern after the constructor in a constructor pattern" }
+
+| /constr_longident: LPAREN COLONCOLON . RPAREN
+| /constr_longident: mod_longident DOT LPAREN COLONCOLON . RPAREN
+  { message "Expected closing `)` after `::` in a constructor" }
+
+| lp=LPAREN;
+  [_* /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
+      /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT
+      /simple_pattern_not_ident: LPAREN pattern . RPAREN
+      /simple_pattern_not_ident: LPAREN pattern . COLON core_type RPAREN]
+  { message "Expected closing `)`, `:`, or `,` after the pattern"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /simple_pattern_not_ident: LPAREN pattern COLON . core_type RPAREN
+  { message "Expected a type after `:` in a parenthesized pattern" }
+
+| lp=LPAREN; _*; [_* /simple_pattern_not_ident: LPAREN pattern COLON core_type . RPAREN]
+| lp=LPAREN;
+  [_* /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
+      /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT
+      /simple_pattern_not_ident: mod_longident DOT LPAREN pattern . RPAREN]
+  { message "Expected closing `)` after the parenthesized pattern"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lb=LBRACKET;
+  [_* /\_: LBRACKET pattern_semi_list . RBRACKET]
+  { message "Expected closing `]` after the pattern list"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACKETBAR;
+  [_* /\_: LBRACKETBAR pattern_semi_list . BARRBRACKET]
+  { message "Expected closing `|]` after the pattern list"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| /pattern_no_exn: pattern_no_exn COLONCOLON . pattern
+  { message "Expected a pattern after `::`" }
+
+| /pattern_no_exn: pattern_no_exn BAR . pattern
+| /reversed_preceded_or_separated_nonempty_llist(BAR,match_case): BAR . match_case
+| /reversed_preceded_or_separated_nonempty_llist(BAR,match_case): reversed_preceded_or_separated_nonempty_llist(BAR,match_case) BAR . match_case
+  { message "Expected a pattern after `|`" }
+
+(* `| p -> .M.f x`: the `.` is read as the refutation of the case. *)
+| d=DOT /match_case: pattern MINUSGREATER DOT .
+  @ LIDENT, UIDENT, LPAREN, LBRACKET, LBRACE
+  { message "Expected `|` to introduce another case, or the match/function/try expression ends here"
+      ~sub:[ mkloc $startpos(d) $endpos(d),
+             "a `.` after `->` marks an unreachable case, it cannot be followed by an expression" ] }
+
+(* `let x = match ... in` missing its `in`: the last case of the `match`
+   extends until the error, and a new case cannot fix that. Only for a
+   local `let`: a toplevel one is more likely a complete definition. *)
+| (EQUAL | MINUSGREATER | IN | SEMI | LPAREN | DO);
+  pos=[_* / let_bindings(ext) _* . IN _* <- _*; (m=MATCH | m=FUNCTION | m=TRY); _*]
+  %partial {
+    (* A closing delimiter or the arrow of a case points to another
+       mistake: a missing opening delimiter, or a missing `|`. *)
+    match token with
+    | MINUSGREATER | WHEN -> None
+    | _ when closing_delimiter token <> None -> None
+    | _ ->
+      some_message "Expected `in` to continue the let-binding"
+        ~sub:[ mkloc $startpos(pos) $startpos(pos), "this let-binding starts here";
+               mkloc $startpos(m) $endpos(m),
+               "the cases of this expression continue until the error: \
+                if the let-binding ends after its last case, `in` is missing there" ] }
+
+| [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): match_case .]
+| [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): BAR match_case .]
+| [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): reversed_preceded_or_separated_nonempty_llist(BAR,match_case) BAR match_case .]
+  { message "Expected `|` to introduce another case, or the match/function/try expression ends here" }
+
+| /pattern_no_exn: pattern_no_exn AS . val_ident
+| /option(preceded(AS,mkrhs(LIDENT))): AS . LIDENT
+  { message "Expected an identifier after `as`" }
+
+| /labeled_tuple_pat_element_list(pattern_no_exn): TILDE LIDENT . COMMA _*
+  /reversed_labeled_tuple_pattern(pattern_no_exn): TILDE LIDENT . COMMA DOTDOT
+  { message "Expected `,` after the labeled pattern" }
+
+| /simple_param_pattern: TILDE LPAREN . label_let_pattern RPAREN
+  { message "Expected a labeled parameter after `~(`" }
+
+| /label_let_pattern: label_var COLON . possibly_poly_type
+  { message "Expected a type after `:` in a labeled parameter" }
+
+| /simple_param_pattern: QUESTION . LPAREN label_let_pattern opt_default RPAREN
+  /simple_param_pattern: QUESTION . LIDENT
+| /simple_param_pattern: OPTLABEL . LPAREN let_pattern opt_default RPAREN
+  /simple_param_pattern: OPTLABEL . pattern_var
+  { message "Expected a labeled parameter after `?`" }
+
+| /simple_param_pattern: QUESTION LPAREN . label_let_pattern opt_default RPAREN
+  { message "Expected a labeled parameter after `?(`" }
+
+| /preceded(EQUAL,seq_expr): EQUAL . seq_expr
+  { message "Expected an expression after `=` in an optional labeled parameter" }
+
+| [_* /module_expr: FUNCTOR attributes . functor_args MINUSGREATER module_expr]
+  { message "Expected an argument after `functor`" }
+
+| lp=LPAREN; [_* /functor_arg: LPAREN module_name . COLON module_type RPAREN]
+  { message "Expected `:` after the module name in a functor argument"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /functor_arg: LPAREN module_name COLON . module_type RPAREN
+  { message "Expected a module type after `:` in a functor argument" }
+
+| lp=LPAREN; /functor_arg: LPAREN . RPAREN
+  /functor_arg: LPAREN . module_name COLON module_type RPAREN
+  /module_type: LPAREN . module_type RPAREN
+  { message "Expected a module name, module type, or `)` after `(`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN; /functor_arg: LPAREN . RPAREN
+  /functor_arg: LPAREN . module_name COLON module_type RPAREN
+  { message "Expected a module name or `)` after `(` in a functor argument"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| [_* /module_type: FUNCTOR attributes . functor_args MINUSGREATER module_type]
+  { message "Expected an argument after `functor` in a module type" }
+
+| /module_type: FUNCTOR attributes functor_args MINUSGREATER . module_type
+| /module_type: functor_args MINUSGREATER . module_type
+| /module_type: module_type MINUSGREATER . module_type
+  { message "Expected a module type after `->`" }
+
+| /\_: module_type WITH . separated_nonempty_llist(AND,with_constraint)
+  { message "Expected a constraint after `with`" }
+
+| [_* /with_constraint: TYPE type_parameters . label_longident _*]
+  { message "Expected a type name after `type` in a constraint" }
+
+| [_* /with_constraint: TYPE type_parameters mkrhs(label_longident) . with_type_binder core_type_no_attr constraints
+      /with_constraint: TYPE type_parameters label_longident . COLONEQUAL alias_type]
+  { message "Expected `=` or `:=` after the type name in a constraint" }
+
+| /with_constraint: TYPE type_parameters label_longident COLONEQUAL . alias_type
+  { message "Expected a type after `:=` in a `with type` constraint" }
+
+| [_* /with_constraint: TYPE type_parameters mkrhs(label_longident) with_type_binder . core_type_no_attr constraints]
+  { message "Expected a type after `=` in a `with type` constraint" }
+
+| /preceded(CONSTRAINT,constrain): CONSTRAINT . constrain
+| [_* /class_sig_field: CONSTRAINT attributes . constrain_field post_item_attributes]
+  { message "Expected a type after `constraint`" }
+
+| [_* /constrain: core_type . EQUAL core_type]
+  { message "Expected `=` after the type in a constraint" }
+
+| /constrain: core_type EQUAL . core_type
+  { message "Expected a type after `=` in a constraint" }
+
+| /with_constraint: MODULE . mod_longident _*
+  /with_constraint: MODULE . TYPE _*
+  { message "Expected a module or `type` after `module` in a constraint" }
+
+| /with_constraint: MODULE TYPE . mty_longident _*
+  { message "Expected a module type name after `module type` in a constraint" }
+
+| [_* /with_constraint: MODULE TYPE mty_longident . EQUAL module_type
+      /with_constraint: MODULE TYPE mty_longident . COLONEQUAL module_type]
+  { message "Expected a module type binding after the module type name in a constraint" }
+
+| /with_constraint: MODULE TYPE mty_longident EQUAL . module_type
+  { message "Expected a module type after `=` in a module constraint" }
+
+| /with_constraint: MODULE TYPE mty_longident COLONEQUAL . module_type
+  { message "Expected a module type after `:=` in a module constraint" }
+
+| [_* /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT
+      /with_constraint: MODULE mod_longident . EQUAL mod_ext_longident
+      /with_constraint: MODULE mod_longident . COLONEQUAL mod_ext_longident]
+  { message "Expected a module expression or module type after the module name in a constraint" }
+
+| /with_constraint: MODULE mod_longident EQUAL . mod_ext_longident
+  { message "Expected a module expression after `=` in a module constraint" }
+
+| /with_constraint: MODULE mod_longident COLONEQUAL . mod_ext_longident
+  { message "Expected a module expression after `:=` in a module constraint" }
+
+| /reversed_separated_nonempty_llist(AND,with_constraint): reversed_separated_nonempty_llist(AND,with_constraint) AND . with_constraint
+  { message "Expected a constraint after `and`" }
+
+| lp=LPAREN; [_* /module_type: LPAREN module_type . RPAREN]
+| lp=LPAREN; MODULE; _*;
+  [_* /simple_pattern_not_ident: LPAREN MODULE ext_attributes mkrhs(module_name) COLON package_type_ . RPAREN]
+| lp=LPAREN; MODULE; _*;
+  [_* /delimited_type_supporting_local_open: LPAREN MODULE ext_attributes package_type_ . RPAREN]
+  { message "Expected closing `)` after the module type"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| lp=LPAREN; module_name; COLON;
+  [_* /functor_arg: LPAREN module_name COLON module_type . RPAREN]
+  { message "Expected closing `)` after the functor argument"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /module_expr: FUNCTOR attributes functor_args MINUSGREATER . module_expr
+  { message "Expected a module expression after `->`" }
+
+| /paren_module_expr: LPAREN module_expr COLON . module_type RPAREN
+  { message "Expected a module type after `:`" }
+
+| lp=LPAREN; module_expr; COLON;
+  [_* /paren_module_expr: LPAREN module_expr COLON module_type . RPAREN]
+| lp=LPAREN; MODULE; ext_attributes; module_expr; COLON;
+  [_* /simple_expr_attrs: LPAREN MODULE ext_attributes module_expr COLON package_type_ . RPAREN]
+  { message "Expected closing `)` after the parenthesized module with type annotation"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /fun_expr_attrs: LET ext_attributes local_structure_item IN . seq_expr
+| /fun_expr: let_bindings(ext) IN . seq_expr
+| /fun_expr: LETOP letop_bindings IN . seq_expr
+  { message "Expected an expression after `in`" }
+
+| lb=LBRACKET;
+  /constr_extra_nonprefix_ident: LBRACKET . RBRACKET
+  /simple_expr_: LBRACKET . expr_semi_list RBRACKET
+| lb=LBRACKET;
+  /simple_expr_: open_dot_declaration DOT LBRACKET . expr_semi_list RBRACKET
+  /simple_expr: mod_longident DOT LBRACKET . RBRACKET
+  { message "Expected an expression list or `]` after `[`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| lb=LBRACELESS; /simple_expr_: LBRACELESS . object_expr_content GREATERRBRACE
+  /simple_expr: LBRACELESS . GREATERRBRACE
+  { message "Expected an object field or `>}` after `{<`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| /preceded(EQUAL,expr): EQUAL . expr
+  { message "Expected an expression after `=` in a record expression" }
+
+| lb=LBRACE; /simple_expr: LBRACE . record_expr_content RBRACE
+| lb=LBRACE; /simple_expr: mod_longident DOT LBRACE . record_expr_content RBRACE
+  { message "Expected the record contents after `{`"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| [_* /simple_expr_attrs: BEGIN ext attributes . seq_expr END
+      /simple_expr_attrs: BEGIN ext_attributes . END]
+  { message "Expected an expression after `begin`" }
+
+| [_* /fun_expr_attrs: LAZY ext_attributes . simple_expr]
+  { message "Expected an expression after `lazy`" }
+
+| /simple_expr: BANG . simple_expr
+  { message "Expected an expression after `!`" }
+
+| /simple_expr: simple_expr HASHOP . simple_expr
+  { message "Expected an expression after the `#<op>` operator" }
+
+| /simple_expr: simple_expr HASH . LIDENT
+| /toplevel_directive: HASH . ident _*
+  { message "Expected an identifier after `#`" }
+
+| /simple_expr: _* DOTOP . _*
+  { message "Expected `(`, `{`, or `[` after a `.<op>` operator" }
+
+| / simple_expr qualified_dotop LPAREN . expr_semi_list _*
+  { message "Expected an expression list after `.<op>(`" }
+
+| /reversed_labeled_tuple_body: _* LABEL . simple_expr _*
+  { message "Expected an expression after the label in a labeled tuple" }
+
+| [_* /reversed_labeled_tuple_body: LABEL simple_expr . COMMA _*]
+  { message "Expected `,` after the expression in a labeled tuple" }
+
+| /simple_expr: simple_expr DOT . LPAREN seq_expr RPAREN
+  /simple_expr: simple_expr DOT . LBRACE seq_expr RBRACE
+  /simple_expr: simple_expr DOT . LBRACKET seq_expr RBRACKET
+  /simple_expr: simple_expr DOT . mod_longident _*
+  /simple_expr: simple_expr DOT . label_longident
+| /constr_longident: mod_longident DOT . LPAREN COLONCOLON RPAREN
+  /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+  /mk_longident(mod_longident,val_ident): mod_longident DOT . val_ident
+  /simple_expr: mod_longident DOT . LPAREN seq_expr RPAREN
+  /simple_expr_: open_dot_declaration DOT . LBRACELESS object_expr_content GREATERRBRACE
+  /simple_expr: mod_longident DOT . LPAREN RPAREN
+  /simple_expr: mod_longident DOT . LBRACE record_expr_content RBRACE
+  /simple_expr: mod_longident DOT . LBRACKETBAR _*
+  /simple_expr: mod_longident DOT . LBRACKET _*
+  /simple_expr_: open_dot_declaration DOT . LPAREN MODULE ext_attributes module_expr COLON package_type_ RPAREN
+| /constr_longident: mod_longident DOT . LPAREN COLONCOLON RPAREN
+  /mk_longident(mod_longident,LIDENT): mod_longident DOT . LIDENT
+  /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+  /mk_longident(mod_longident,val_ident): mod_longident DOT . val_ident
+  /simple_expr: mod_longident DOT . LPAREN seq_expr RPAREN
+  /simple_expr_: open_dot_declaration DOT . LBRACELESS object_expr_content GREATERRBRACE
+  /simple_expr: mod_longident DOT . LPAREN RPAREN
+  /simple_expr: mod_longident DOT . LBRACE record_expr_content RBRACE
+  /simple_expr: mod_longident DOT . LBRACKETBAR _*
+  /simple_expr: mod_longident DOT . LBRACKET _*
+  /simple_expr_: open_dot_declaration DOT . LPAREN MODULE ext_attributes module_expr COLON package_type_ RPAREN
+  { message "Expected an identifier, `(`, `{`, or `[` after `.`" }
+
+| /simple_expr: simple_expr DOT LPAREN . seq_expr RPAREN
+| /fun_expr: simple_expr DOT LPAREN . seq_expr _*
+  /simple_expr: simple_expr DOT LPAREN . seq_expr RPAREN
+  { message "Expected an expression after `(`" }
+
+| [_* /fun_expr_attrs: IF ext_attributes . seq_expr _*]
+  { message "Expected a condition after `if`" }
+
+| [_* / FUNCTION ext_attributes . match_cases]
+  { message "Expected a pattern after `function`" }
+
+| [_* /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
+      /match_case: pattern . MINUSGREATER seq_expr
+      /match_case: pattern . WHEN seq_expr MINUSGREATER seq_expr
+      /match_case: pattern . MINUSGREATER DOT
+      /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT]
+  { message "Expected `->`, `when`, or `,` after the pattern" }
+
+| /match_case: pattern WHEN . seq_expr MINUSGREATER seq_expr
+| /payload: QUESTION pattern WHEN . seq_expr
+  { message "Expected a guard expression after `when`" }
+
+| [_* /fun_expr_attrs: FUN ext_attributes . fun_params option(preceded(COLON,atomic_type)) MINUSGREATER fun_body]
+| [_* /class_expr: FUN attributes . class_fun_def]
+  { message "Expected a parameter after `fun`" }
+
+| /simple_param_pattern: OPTLABEL LPAREN . let_pattern opt_default RPAREN
+  { message "Expected a parameter after `?(`" }
+
+| /\_: pattern COLON . possibly_poly_type
+  { message "Expected a type after `:` in a let pattern" }
+
+| lp=LPAREN; _*; [_* /simple_param_pattern: OPTLABEL LPAREN let_pattern opt_default . RPAREN]
+| lp=LPAREN; _*; [_* /simple_param_pattern: QUESTION LPAREN label_let_pattern opt_default . RPAREN]
+  { message "Expected closing `)` after the optional labeled parameter"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_longident: LPAREN . COLONCOLON RPAREN
+  /fun_param_as_list: LPAREN . TYPE lident_list RPAREN
+  /simple_pattern_not_ident: LPAREN . pattern RPAREN
+  /simple_pattern_not_ident: LPAREN . MODULE _*
+  /simple_pattern_not_ident: LPAREN . pattern COLON core_type RPAREN
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected a pattern, operator, `module`, `type`, `)`, or `::)` after `(`" }
+
+| /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_longident: LPAREN . COLONCOLON RPAREN
+  /simple_pattern_not_ident: LPAREN . pattern RPAREN
+  /simple_pattern_not_ident: LPAREN . MODULE _*
+  /simple_pattern_not_ident: LPAREN . pattern COLON core_type RPAREN
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected a pattern, module, or operator after `(`" }
+
+| /fun_param_as_list: LPAREN TYPE . lident_list RPAREN
+  { message "Expected type variables after `type`" }
+
+| lp=LPAREN; TYPE;
+  [_* /fun_param_as_list: LPAREN TYPE lident_list . RPAREN]
+  { message "Expected closing `)` after the polymorphic type variables"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /simple_param_pattern: LABEL . simple_pattern
+  { message "Expected a pattern after `~label:` (or `?label:`) in a labeled parameter" }
+
+| [_* /fun_expr_attrs: FUN ext_attributes fun_params option(preceded(COLON,atomic_type)) . MINUSGREATER fun_body]
+  { message "Expected `->` after the function parameters" }
+
+| /fun_expr_attrs: FUN ext_attributes fun_params option(preceded(COLON,atomic_type)) MINUSGREATER . fun_body
+  { message "Expected a function body after `->`" }
+
+| lp=LPAREN; MODULE; _*;
+  [_* /simple_expr_: open_dot_declaration DOT LPAREN MODULE ext_attributes . module_expr COLON package_type_ RPAREN]
+| lp=LPAREN; MODULE; _*;
+  [_* /simple_expr_attrs: LPAREN MODULE ext_attributes . module_expr _*]
+  { message "Expected a module expression after `module`"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| [_* /simple_expr_: open_dot_declaration DOT LPAREN MODULE ext_attributes module_expr . COLON package_type_ RPAREN]
+  { message "Expected `:` after the module expression in a parenthesized expression" }
+
+| /simple_expr_: open_dot_declaration DOT LPAREN MODULE ext_attributes module_expr COLON . package_type_ RPAREN
+  { message "Expected a module type after `:` in a parenthesized module expression" }
+
+| [_* /expr_colon_package_type: expr COLON package_type . COLONGREATER package_type]
+  { message "Expected closing `)` or `:>` after the parenthesized module expression with type annotation" }
+
+| [_* /simple_expr_: open_dot_declaration DOT LPAREN MODULE ext_attributes module_expr COLON package_type_ . RPAREN]
+| [_* /paren_module_expr: LPAREN VAL attributes expr_colon_package_type . RPAREN]
+  { message "Expected closing `)` after the parenthesized module expression with type annotation" }
+
+| /letop_binding_body: simple_pattern COLON . core_type EQUAL seq_expr
+| /let_binding_body_no_punning: simple_pattern_not_ident COLON . core_type EQUAL seq_expr
+  { message "Expected a type after `:` in a let-binding" }
+
+| [_* /letop_binding_body: simple_pattern COLON core_type . EQUAL seq_expr]
+  { message "Expected `=` after the type in a let-binding" }
+
+| /letop_binding_body: simple_pattern COLON core_type EQUAL . seq_expr
+  { message "Expected an expression after `=` in a let-binding" }
+
+| [_* /fun_expr_attrs: FOR ext_attributes . pattern EQUAL seq_expr direction_flag seq_expr do_done_expr]
+  { message "Expected a pattern after `for`" }
+
+| [_* /fun_expr_attrs: FOR ext_attributes pattern . EQUAL seq_expr direction_flag seq_expr do_done_expr
+      /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
+      /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT]
+  { message "Expected `=` after the pattern in a for loop" }
+
+| /fun_expr_attrs: FOR ext_attributes pattern EQUAL . seq_expr direction_flag seq_expr do_done_expr
+  { message "Expected an expression after `=` in a for loop" }
+
+| [_* /fun_expr_attrs: ASSERT ext_attributes . simple_expr]
+  { message "Expected an expression after `assert`" }
+
+| [_* /expr_: subtractive . expr]
+| /fun_expr: fun_expr MINUS . _*
+  { message "Expected an expression after `-`" }
+
+| /labeled_simple_expr: TILDE . LIDENT
+  /labeled_simple_expr: TILDE . LPAREN LIDENT type_constraint RPAREN
+  { message "Expected a labeled expression after `~`" }
+
+| lp=LPAREN; LIDENT;
+  [_* /labeled_simple_expr: TILDE LPAREN LIDENT type_constraint . RPAREN]
+  { message "Expected closing `)` after the labeled expression"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /labeled_simple_expr: QUESTION . LIDENT
+  { message "Expected a labeled expression after `?`" }
+
+| /labeled_simple_expr: OPTLABEL . simple_expr
+  { message "Expected an expression after the optional label" }
+
+| /labeled_simple_expr: LABEL . simple_expr
+  { message "Expected an expression after `~label` in a labeled argument" }
+
+| /fun_expr: fun_expr STAR . _*
+  { message "Expected an expression after `*`" }
+
+| /fun_expr: fun_expr PLUSEQ . _*
+  { message "Expected an expression after `+=`" }
+
+| /fun_expr: fun_expr PLUSDOT . _*
+  { message "Expected an expression after `+.`" }
+
+| /fun_expr: fun_expr PLUS . _*
+| [_* /expr_: additive . expr]
+  { message "Expected an expression after `+`" }
+
+| /fun_expr: fun_expr PERCENT . _*
+  { message "Expected an expression after `%`" }
+
+| /fun_expr: fun_expr OR . _*
+  { message "Expected an expression after `or`" }
+
+| /fun_expr: fun_expr MINUSDOT . _*
+  { message "Expected an expression after `-.`" }
+
+| /fun_expr: fun_expr LESS . _*
+  { message "Expected an expression after `<`" }
+
+| /fun_expr: fun_expr INFIXOP4 . _*
+| /fun_expr: fun_expr INFIXOP3 . _*
+| /fun_expr: fun_expr INFIXOP2 . _*
+| /fun_expr: fun_expr INFIXOP1 . _*
+| /fun_expr: fun_expr INFIXOP0 . _*
+  { message "Expected an expression after the infix operator" }
+
+| /fun_expr: fun_expr GREATER . _*
+  { message "Expected an expression after `>`" }
+
+| /fun_expr: fun_expr EQUAL . _*
+| /strict_binding: EQUAL . seq_expr
+| /let_binding_body_no_punning: let_ident COLON TYPE lident_list DOT core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: let_ident COLON poly(core_type) EQUAL . seq_expr
+| /let_binding_body_no_punning: val_ident type_constraint EQUAL . seq_expr
+| /let_binding_body_no_punning: simple_pattern_not_ident COLON core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: pattern_no_exn EQUAL . seq_expr
+| /letop_binding_body: pattern_no_exn EQUAL . seq_expr
+  @ QUOTE
+  { message "Expected an expression, but `'` starts either a character literal \
+             (which needs a closing quote, e.g. `'a'`) or a type variable \
+             (only valid in a type position)" }
+
+| /fun_expr: fun_expr EQUAL . _*
+| /strict_binding: EQUAL . seq_expr
+| /let_binding_body_no_punning: let_ident COLON TYPE lident_list DOT core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: let_ident COLON poly(core_type) EQUAL . seq_expr
+| /let_binding_body_no_punning: val_ident type_constraint EQUAL . seq_expr
+| /let_binding_body_no_punning: simple_pattern_not_ident COLON core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: pattern_no_exn EQUAL . seq_expr
+| /letop_binding_body: pattern_no_exn EQUAL . seq_expr
+  { message "Expected an expression after `=`" }
+
+| /fun_expr: fun_expr COLONEQUAL . _*
+  { message "Expected an expression after `:=`" }
+
+| /fun_expr: fun_expr COLONCOLON . expr
+  { message "Expected an expression after `::`" }
+
+| /fun_expr: fun_expr BARBAR . _*
+  { message "Expected an expression after `||`" }
+
+| /fun_expr: fun_expr AMPERSAND . _*
+  { message "Expected an expression after `&`" }
+
+| /fun_expr: fun_expr AMPERAMPER . _*
+  { message "Expected an expression after `&&`" }
+
+| [_* /fun_seq_expr: fun_expr SEMI PERCENT attr_id . seq_expr]
+  { message "Expected an expression after the extension name" }
+
+| [_* /and_let_binding: AND attributes . let_binding_body post_item_attributes]
+  { message "Expected a let-binding after `and`" }
+
+| /let_binding_body_no_punning: let_ident COLON TYPE . lident_list DOT core_type EQUAL seq_expr
+  { message "Expected a type parameter after `type`" }
+
+(* `('a 'b) t`: a missing `,` between the parameters of a type constructor. *)
+| [_* /function_type: _* LPAREN reversed_nonempty_llist(typevar) . DOT _* <- _; QUOTE; _]
+  @ RPAREN
+  { message "Expected `.` after the type parameters, or `,` between the parameters of a type constructor, e.g. `('a, 'b) t`" }
+
+(* A single type variable is a type, not the start of a polymorphic type. *)
+| [_* /let_binding_body_no_punning: let_ident COLON TYPE lident_list . DOT core_type EQUAL seq_expr]
+| [_* /let_binding_body_no_punning: val_ident COLON reversed_nonempty_llist(typevar) . DOT core_type EQUAL seq_expr <- _; QUOTE; _]
+| [_* /poly(core_type_no_attr): typevar_list . DOT core_type_no_attr <- _; QUOTE; _]
+| [_* /generalized_constructor_arguments: COLON typevar_list . DOT _* <- _; QUOTE; _]
+| [_* /possibly_poly(core_type): reversed_nonempty_llist(typevar) . DOT core_type <- _; QUOTE; _]
+(* Parenthesized polymorphic parameter type/pattern, e.g. `('a 'b. 'a -> 'b)
+   -> t` or `(x : 'a 'b. 'a -> 'b)`. *)
+| [_* /function_type: _* LPAREN reversed_nonempty_llist(typevar) . DOT _* <- _; QUOTE; _]
+| [_* /simple_param_pattern: LPAREN pattern COLON reversed_nonempty_llist(typevar) . DOT core_type RPAREN <- _; QUOTE; _]
+| [_* /simple_param_pattern: LABEL LPAREN pattern COLON reversed_nonempty_llist(typevar) . DOT core_type RPAREN <- _; QUOTE; _]
+  { message "Expected `.` after the type parameters" }
+
+(* `val f : 'a (int) list`: a type followed by the beginning of another one,
+   most likely a missing `->`. *)
+| [_* /value_description: VAL ext attributes mkrhs(val_ident) COLON possibly_poly(core_type) . post_item_attributes
+   <- _*; AS; QUOTE; _]
+  @ LPAREN, QUOTE, UIDENT, UNDERSCORE, LBRACKET, LESS
+  { message "Expected the end of the declaration after the type alias" }
+
+| [_* /value_description: VAL ext attributes mkrhs(val_ident) COLON possibly_poly(core_type) . post_item_attributes]
+  @ LPAREN, QUOTE, UIDENT, UNDERSCORE, LBRACKET, LESS
+  { message "Expected `->` before this type, or the end of the declaration" }
+
+| /let_binding_body_no_punning: let_ident COLON TYPE lident_list DOT . core_type EQUAL seq_expr
+| /let_binding_body_no_punning: val_ident COLON reversed_nonempty_llist(typevar) DOT . core_type EQUAL seq_expr
+| /poly(core_type_no_attr): typevar_list DOT . core_type_no_attr
+| /generalized_constructor_arguments: COLON typevar_list DOT . constructor_arguments MINUSGREATER atomic_type
+  /generalized_constructor_arguments: COLON typevar_list DOT . atomic_type
+| /possibly_poly(core_type): reversed_nonempty_llist(typevar) DOT . core_type
+| /method_: override_flag attributes private_flag mkrhs(label) COLON TYPE lident_list DOT . core_type _*
+| /function_type: _* LPAREN reversed_nonempty_llist(typevar) DOT . core_type _*
+| /simple_param_pattern: LPAREN pattern COLON reversed_nonempty_llist(typevar) DOT . core_type RPAREN
+| /simple_param_pattern: LABEL LPAREN pattern COLON reversed_nonempty_llist(typevar) DOT . core_type RPAREN
+  { message "Expected a type after `.`" }
+
+| lp=LPAREN; _*; [_* /function_type: _* LPAREN reversed_nonempty_llist(typevar) DOT core_type . RPAREN _*]
+| lp=LPAREN; _*; [_* /simple_param_pattern: LPAREN poly_pattern . RPAREN]
+| lp=LPAREN; _*; [_* /simple_param_pattern: LABEL LPAREN poly_pattern . RPAREN]
+  { message "Expected closing `)` after the polymorphic type"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| [_* /let_binding_body_no_punning: let_ident COLON TYPE lident_list DOT core_type . EQUAL seq_expr]
+| [_* /let_binding_body_no_punning: let_ident COLON poly(core_type) . EQUAL seq_expr]
+| [_* /let_binding_body_no_punning: simple_pattern_not_ident COLON core_type . EQUAL seq_expr]
+  { message "Expected `=` after the type" }
+
+| [_* /let_binding_body_no_punning: val_ident type_constraint . EQUAL seq_expr]
+  { message "Expected `=` after the type constraint" }
+
+| [_* /strict_binding: fun_params option(type_constraint) . EQUAL fun_body]
+  { message "Expected `=` after the function parameters" }
+
+| /strict_binding: fun_params option(type_constraint) EQUAL . fun_body
+  { message "Expected a function body after `=`" }
+
+| [_* /labeled_tuple_pat_element_list(pattern_no_exn): pattern_no_exn . COMMA _*
+      /let_binding_body_no_punning: pattern_no_exn . EQUAL seq_expr
+      /reversed_labeled_tuple_pattern(pattern_no_exn): pattern_no_exn . COMMA DOTDOT]
+| [_* /labeled_tuple_pat_element_list(pattern_no_exn): pattern_no_exn . COMMA _*
+      /letop_binding_body: pattern_no_exn . EQUAL seq_expr
+      /reversed_labeled_tuple_pattern(pattern_no_exn): pattern_no_exn . COMMA DOTDOT]
+  { message "Expected `=` (or `,`) after the pattern" }
+
+| op=STRUCT; attributes; [_* /module_expr: STRUCT attributes structure . END]
+| op=STRUCT; [_* /module_expr: STRUCT attributes structure . END]
+  { message "Expected a structure item or closing `end` in the structure"
+      ~sub:[ mkloc $startpos(op) $endpos(op), "opened here" ] }
+
+(* `let x = ... and* y = ...`: binding operators must be introduced by a
+   `let<op>`, a plain `let` only accepts `and`. *)
+| [_* / _* let_bindings(ext) . _*] @ ANDOP
+  %partial {
+    match token with
+    | ANDOP op ->
+      some_msgf "`%s` can only follow a binding operator such as `let%s`; \
+                 use `and` after a plain `let`"
+        op (String.sub op 3 (String.length op - 3))
+    | _ -> None
+  }
+
+(* At the top of a file, a let-binding reaches a state shared by a
+   structure-level definition and the beginning of a toplevel `let ... in`
+   expression. The former is much more likely, so report it like any later
+   definition (see the `implementation: structure . EOF` clause below).
+   Moved below the "Expected `=`" rule to avoid shadowing punning
+   let-bindings. *)
+| [_* /implementation: structure . EOF] @ IN
+| [_* /interface: signature . EOF] @ IN
+  { message "`in` can only follow the bindings of a local `let`" }
+
+(* `module A = B` followed by `C = D` on the next line: an uppercase
+   identifier cannot start an item, the `module` keyword is likely missing.
+   On the same line, the identifier more likely continues the module
+   expression (`F X`, `M N` for `M.N`). Only after a module item: `type t
+   M.t = ...` is better explained by the rules for `type`. *)
+| r=[_* /implementation: structure . EOF <- _*; MODULE; _*] @ UIDENT
+| r=[_* /module_expr: STRUCT attributes structure . END <- _*; MODULE; _*] @ UIDENT
+  %partial {
+    match token with
+    | UIDENT u when $startpos(token).pos_lnum > $endpos(r).pos_lnum ->
+      some_msgf "Expected a structure item; if `%s` starts a module definition, \
+                 the `module` keyword is missing" u
+    | UIDENT u ->
+      some_msgf "Expected a structure item; if `%s` is a functor argument, \
+                 it must be in parentheses: `(%s)`" u u
+    | _ -> None
+  }
+
+| r=[_* /interface: signature . EOF <- _*; (MODULE | VAL | EXTERNAL | EXCEPTION); _*] @ UIDENT
+| r=[_* /module_type: SIG attributes signature . END <- _*; (MODULE | VAL | EXTERNAL | EXCEPTION); _*] @ UIDENT
+  %partial {
+    match token with
+    | UIDENT u when $startpos(token).pos_lnum > $endpos(r).pos_lnum ->
+      some_msgf "Expected a signature item; if `%s` starts a module declaration, \
+                 the `module` keyword is missing" u
+    | _ -> None
+  }
+
+| [_* / fun_expr: let_bindings(ext) . IN seq_expr
+      / structure_item: let_bindings(ext) .]
+| [_* /implementation: structure . EOF]
+| [_* /interface: signature . EOF]
+  %partial {
+    (* Nothing can be open at this point. *)
+    match closing_delimiter token with
+    | Some delim -> some_msgf "This `%s` does not close anything" delim
+    | None -> None
+  }
+
+| [_* / fun_expr: let_bindings(ext) . IN seq_expr
+      / structure_item: let_bindings(ext) .]
+  { message "Expected a structure item or end of file" }
+
+| pos=[_* / LET _* . IN _*]
+| pos=[_* / let_bindings(ext) _* . IN _*]
+| pos=[_* / let_bindings(no_ext) _* . IN _*]
+  { let sub = [ mkloc $startpos(pos) $startpos(pos), "this let-binding starts here" ] in
+    let sub = match !bound_expr with
+      | Some (s, e, expr) when e.Lexing.pos_lnum > s.Lexing.pos_lnum ->
+        (* Look for the argument that starts a new line, no more indented
+           than the `let`: the binding was probably meant to end before. *)
+        let col = column $startpos(pos) in
+        begin match split_at_line_break ~col (expr ()) with
+          | Some p ->
+            sub @ [ mkloc p p,
+                    "`in` is probably missing here: a line break does not \
+                     end an expression, the next line is read as an argument" ]
+          | None | exception _ ->
+            sub @ [ mkloc s s,
+                    Printf.sprintf
+                      "this expression continues until line %d: a line break does \
+                       not end it, so if it was meant to end on line %d, \
+                       `in` is missing there" e.Lexing.pos_lnum s.Lexing.pos_lnum ]
+        end
+      | _ -> sub
+    in
+    message "Expected `in` to continue the let-binding" ~sub }
+
+| [_* / simple_expr qualified_dotop LPAREN expr_semi_list . RPAREN _*]
+  { message "Expected closing `)` after the expression list" }
+
+| / simple_expr qualified_dotop LBRACKET . expr_semi_list _*
+  { message "Expected an expression list after `.<op>[`" }
+
+(* Stress-test finding: add the opening-bracket location for the plain
+   list-literal case specifically (the corpus-tested one), the same way
+   the parenthesis rule near the top of this file does - without touching
+   the DOTOP index operators right below, which keep their
+   existing (location-less) message unchanged; enumerating a distinct
+   "which LBRACKET is the relevant one" for each of those individually
+   wasn't judged worth the added complexity here. *)
+| lb=LBRACKET; [_* /simple_expr_: LBRACKET expr_semi_list . RBRACKET]
+  { message "Expected closing `]` after the expression list"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| [_* /simple_expr_: open_dot_declaration DOT LBRACKET expr_semi_list . RBRACKET]
+| [_* / simple_expr qualified_dotop LBRACKET expr_semi_list . RBRACKET _*]
+  { message "Expected closing `]` after the expression list" }
+
+| / simple_expr qualified_dotop LBRACE . expr_semi_list _*
+  { message "Expected an expression list after `.<op>{`" }
+
+| [_* / simple_expr qualified_dotop LBRACE expr_semi_list . RBRACE _*]
+  { message "Expected closing `}` after the expression list" }
+
+| lp=LPAREN;
+  [_* /fun_expr: simple_expr DOT LPAREN seq_expr . RPAREN _*
+      /simple_expr: simple_expr DOT LPAREN seq_expr . RPAREN]
+| lp=LPAREN; [_* /simple_expr: mod_longident DOT LPAREN seq_expr . RPAREN]
+| lp=LPAREN; [_* /simple_expr: simple_expr DOT LPAREN seq_expr . RPAREN]
+| lp=LPAREN;
+  [_* /simple_expr: LPAREN seq_expr . RPAREN
+      /simple_expr: LPAREN seq_expr . type_constraint RPAREN]
+  { message "Expected closing `)` after the expression"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }
+
+| /fun_expr: simple_expr DOT LBRACKET . seq_expr _*
+  /simple_expr: simple_expr DOT LBRACKET . seq_expr RBRACKET
+| /simple_expr: simple_expr DOT LBRACKET . seq_expr RBRACKET
+  { message "Expected an index expression after `.[`" }
+
+| lb=LBRACKET;
+  [_* /fun_expr: simple_expr DOT LBRACKET seq_expr . RBRACKET _*
+      /simple_expr: simple_expr DOT LBRACKET seq_expr . RBRACKET]
+| lb=LBRACKET; [_* /simple_expr: simple_expr DOT LBRACKET seq_expr . RBRACKET]
+  { message "Expected closing `]` after the index expression"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| /fun_expr: simple_expr DOT LBRACE . seq_expr _*
+  /simple_expr: simple_expr DOT LBRACE . seq_expr RBRACE
+| /simple_expr: simple_expr DOT LBRACE . seq_expr RBRACE
+  { message "Expected an index expression after `.{`" }
+
+| lb=LBRACE;
+  [_* /fun_expr: simple_expr DOT LBRACE seq_expr . RBRACE _*
+      /simple_expr: simple_expr DOT LBRACE seq_expr . RBRACE]
+| lb=LBRACE; [_* /simple_expr: simple_expr DOT LBRACE seq_expr . RBRACE]
+  { message "Expected closing `}` after the index expression"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+| [_* /fun_expr: simple_expr DOT mod_longident . DOTOP _*
+      /mk_longident(mod_longident,LIDENT): mod_longident . DOT LIDENT
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT
+      /simple_expr: simple_expr DOT mod_longident . DOTOP _*]
+| [_* /mk_longident(mod_longident,LIDENT): mod_longident . DOT LIDENT
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT
+      /simple_expr: simple_expr DOT mod_longident . DOTOP _*]
+  { message "Expected `.` to complete module path" }
+
+| [_* /fun_expr_attrs: FOR ext_attributes pattern EQUAL seq_expr . direction_flag seq_expr do_done_expr]
+  { message "Expected `to` or `downto` after the expression in a `for` loop" }
+
+| [_* /fun_expr_attrs: FOR ext_attributes pattern EQUAL seq_expr direction_flag . seq_expr do_done_expr]
+  { message "Expected an expression after `to` or `downto` in a `for` loop" }
+
+| FOR; ext_attributes; pattern; EQUAL; seq_expr; direction_flag; c=[seq_expr]
+  { keyword_message ~keyword:"`do`" ~header:"bound"
+      "Expected `do` after the expression in a `for` loop" c }
+
+| [_* /fun_expr_attrs: FOR ext_attributes pattern EQUAL seq_expr direction_flag seq_expr . do_done_expr]
+  { message "Expected `do` after the expression in a `for` loop" }
+
+| /fun_expr: FOR _* DO . seq_expr DONE
+  { message "Expected an expression after `do` in a `for` loop" }
+
+| [_* /fun_expr: FOR _* DO seq_expr . DONE]
+  { message "Expected `done` after the expression in a `for` loop" }
+
+| [_* /fun_expr: LETOP letop_bindings . IN seq_expr]
+  { message "Expected `in` after `let<op>` bindings" }
+
+| /letop_bindings: letop_bindings ANDOP . letop_binding_body
+  { message "Expected a let-binding after `and<op>`" }
+
+| la=LBRACKETBAR; [_* /simple_expr_: LBRACKETBAR expr_semi_list . BARRBRACKET]
+  { message "Expected closing `|]` after the expression list"
+      ~sub:[ mkloc $startpos(la) $endpos(la), "opened here" ] }
+
+| [_* /simple_expr_: open_dot_declaration DOT LBRACKETBAR expr_semi_list . BARRBRACKET]
+  { message "Expected closing `|]` after the expression list" }
+
+| /simple_expr_: open_dot_declaration DOT LBRACELESS . object_expr_content GREATERRBRACE
+  { message "Expected an object field after `{<`" }
+
+| [_* /simple_expr_: open_dot_declaration DOT LBRACELESS object_expr_content . GREATERRBRACE]
+| [_* /simple_expr_: LBRACELESS object_expr_content . GREATERRBRACE]
+  { message "Expected closing `>}` after the object field list" }
+
+(* `{ name "x"; ... }` or `{ a b }`: a single lowercase identifier followed
+   by an expression is more likely a field missing its `=`, or a punned field
+   missing its `;`, than the record of an update. *)
+| [_* /record_expr_content: simple_expr . WITH _*
+   <- l=LIDENT]
+  @ first(simple_expr)
+  { msgf "Expected `=` after the field name `%s`, or `;` before the next field" l }
+
+| [_* /record_expr_content: simple_expr . WITH _*]
+  { message "Expected `with` in a record update, e.g. `{ r with field = ... }`; \
+             to group expressions, use parentheses or `begin ... end`" }
+
+| /record_expr_content: simple_expr WITH . separated_or_terminated_nonempty_list(SEMI,record_expr_field)
+  { message "Expected a record field after `with`" }
+
+| [_* /simple_expr: mod_longident DOT LBRACE record_expr_content . RBRACE]
+  { message "Expected closing `}` after record expression" }
+
+| [_* /match_case: pattern WHEN seq_expr . MINUSGREATER seq_expr]
+  { message "Expected `->` after `when` guard" }
+
+| /match_case: pattern WHEN seq_expr MINUSGREATER . seq_expr
+  { message "Expected an expression after `->`" }
+
+| /match_case: pattern MINUSGREATER . seq_expr
+  /match_case: pattern MINUSGREATER . DOT
+  { message "Expected an expression (or `.`) after `->`" }
+
+| IF; ext_attributes; c=[seq_expr]
+  { then_message "Expected `then` after the expression in an `if` expression" c }
+
+| [_* /fun_expr_attrs: IF ext_attributes seq_expr . THEN _*]
+  { message "Expected `then` after the expression in an `if` expression" }
+
+| /fun_expr_attrs: IF ext_attributes seq_expr THEN . _*
+  { message "Expected an expression after `then`" }
+
+| /fun_expr_attrs: IF ext_attributes seq_expr THEN expr ELSE . expr
+  { message "Expected an expression after `else`" }
+
+| beg=BEGIN; ext; attributes; [_* /simple_expr_attrs: BEGIN ext attributes seq_expr . END]
+  { message "Expected closing `end` after the expression in a `begin ... end` expression"
+      ~sub:[ mkloc $startpos(beg) $endpos(beg), "opened here" ] }
+
+| lb=LBRACE; [_* /simple_expr: LBRACE record_expr_content . RBRACE]
+  { message "Expected closing `}` after record content"
+      ~sub:[ mkloc $startpos(lb) $endpos(lb), "opened here" ] }
+
+(* Grammar restructuring note (5.5.1): `let module`/`let exception`/`let
+   open` inside an expression are no longer their own fun_expr
+   alternatives - they now all go through `LET ext list(attribute)
+   local_structure_item IN seq_expr`, sharing local_structure_item with
+   the top-level `module ...`/`open ...` items. That merges what used to
+   be distinguishable "after `let open`"/"after `let module`" states
+   into the exact same state as the plain "after `open`"/"after
+   `module`" ones below (no residual stack information tells them
+   apart) - so the "let"-specific messages this block used to produce
+   are gone; the generic ones now cover both contexts. *)
+| [_* /rec_module_binding: MODULE ext attributes REC mkrhs(module_name) . module_binding_body post_item_attributes]
+| [_* /and_module_binding: AND attributes mkrhs(module_name) . module_binding_body post_item_attributes]
+| [_* /module_binding: MODULE ext attributes mkrhs(module_name) . module_binding_body post_item_attributes]
+  { message "Expected `=`, `:`, or functor parameters after the module name" }
+
+| /module_binding_body: EQUAL . module_expr
+| /module_binding_body: COLON module_type EQUAL . module_expr
+  { match token with
+    | LET | TYPE | OPEN | INCLUDE | EXCEPTION | EXTERNAL | CLASS ->
+      message "Expected a module expression after `=`; \
+               definitions must be wrapped in `struct ... end`"
+    | _ -> message "Expected a module expression after `=`" }
+
+| /module_binding_body: COLON . module_type EQUAL module_expr
+| /simple_expr_attrs: LPAREN MODULE ext_attributes module_expr COLON . package_type_ RPAREN
+| /expr_colon_package_type: expr COLON . package_type
+| /and_module_declaration: AND attributes mkrhs(module_name) COLON . module_type post_item_attributes
+  { message "Expected a module type after `:`" }
+
+| [_* /module_binding_body: COLON module_type . EQUAL module_expr]
+  { message "Expected `=` after module type" }
+
+| [_* /module_binding_body: functor_arg . module_binding_body]
+  { message "Expected `=`, `:`, or another functor argument after the functor argument" }
+
+(* `let exception` merges into the same local_structure_item state as a
+   plain top-level `exception ...` (see "Expected constructor after
+   `exception`" below) - no dedicated "let"-specific message possible
+   anymore, same grammar-restructuring reason as `let module`/`let open`
+   above. *)
+| /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_ident: LPAREN . COLONCOLON RPAREN
+  { message "Expected a constructor or operator after `(`" }
+
+| /constr_ident: LPAREN COLONCOLON . RPAREN
+| /mk_longident(mod_ext_longident,\_): LPAREN COLONCOLON . RPAREN
+  { message "Expected closing `)` after `::`" }
+
+| /generalized_constructor_arguments: OF . constructor_arguments
+  { message "Expected constructor arguments after `of`" }
+
+| [_* /label_declaration: mutable_flag . mkrhs(label) COLON poly_type_no_attr attributes
+      /label_declaration_semi: mutable_flag . mkrhs(label) COLON poly_type_no_attr attributes SEMI attributes
+   <- _*; MUTABLE]
+  { message "Expected a field name after `mutable`" }
+
+| [_* /label_declaration: mutable_flag . mkrhs(label) COLON poly_type_no_attr attributes
+      /label_declaration_semi: mutable_flag . mkrhs(label) COLON poly_type_no_attr attributes SEMI attributes]
+  { message "Expected a field name" }
+
+| /label_declaration: mutable_flag mkrhs(label) . COLON poly_type_no_attr attributes
+  /label_declaration_semi: mutable_flag mkrhs(label) . COLON poly_type_no_attr attributes SEMI attributes
+  { message "Expected `:` after the field name" }
+
+| /label_declaration: mutable_flag mkrhs(label) COLON . poly_type_no_attr attributes
+  /label_declaration_semi: mutable_flag mkrhs(label) COLON . poly_type_no_attr attributes SEMI attributes
+  { message "Expected a type after `:` in a record field declaration" }
+
+| [_* /constructor_arguments: LBRACE label_declarations . RBRACE]
+  { message "Expected closing `}` after record type" }
+
+| [_* /constructor_arguments: reversed_separated_nonempty_llist(STAR,atomic_type) . STAR atomic_type]
+  { message "Expected `*` after the constructor argument, or the end of the constructor declaration" }
+
+| /constructor_arguments: reversed_separated_nonempty_llist(STAR,atomic_type) STAR . atomic_type
+  /reversed_separated_nonempty_llist(STAR,atomic_type): reversed_separated_nonempty_llist(STAR,atomic_type) STAR . atomic_type
+  { message "Expected a type after `*`" }
+
+| /generalized_constructor_arguments: COLON . constructor_arguments MINUSGREATER atomic_type
+  /generalized_constructor_arguments: COLON . typevar_list DOT constructor_arguments MINUSGREATER atomic_type
+  /generalized_constructor_arguments: COLON . atomic_type
+  /generalized_constructor_arguments: COLON . typevar_list DOT atomic_type
+  { message "Expected a type or constructor arguments after `:`" }
+
+| [_* /generalized_constructor_arguments: COLON typevar_list DOT constructor_arguments . MINUSGREATER atomic_type]
+| [_* /generalized_constructor_arguments: COLON constructor_arguments . MINUSGREATER atomic_type]
+  { message "Expected `->` after constructor arguments" }
+
+| /rec_flag: REC .
+  { message "Expected a let-binding after `let rec`" }
+
+(* `let%x = ...`: [x] was read as the name of an extension. *)
+| LET; PERCENT; id=LIDENT /single_attr_id: LIDENT .
+  { msgf "Expected a let-binding after `let%%%s` \
+          (`%s` is read as the name of an extension)" id id }
+
+| [_* /let_binding(ext): LET ext attributes rec_flag . let_binding_body post_item_attributes]
+  { message "Expected a let-binding after `let`" }
+
+| [_* /simple_expr: LPAREN seq_expr type_constraint . RPAREN]
+  { message "Expected closing `)` after the type constraint" }
+
+| [_* /fun_expr_attrs: MATCH ext_attributes seq_expr . WITH match_cases]
+  { message "Expected `with` after the expression in a `match` expression" }
+
+| /fun_expr_attrs: MATCH ext_attributes seq_expr WITH . match_cases
+  { message "Expected a pattern after `with`" }
+
+| [_* /simple_expr: METAOCAML_BRACKET_OPEN seq_expr . METAOCAML_BRACKET_CLOSE]
+  { message "Expected closing bracket after the expression" }
+
+(* Grammar restructuring note (5.5.1), same as above: these used to be
+   paren_module_expr's own item text directly; the FUNCTION/fun_expr-
+   shaped alternatives now live one level down, in expr_colon_package_type
+   (with no LPAREN VAL list(attribute) prefix - that prefix belongs to
+   paren_module_expr, which now only ever sees expr_colon_package_type as
+   a single, already-reduced symbol). Confirmed via interpret --items
+   that this position is still one real, simultaneous state combining
+   expr_colon_package_type's own not-yet-decided continuation (done? COLON?
+   COLONGREATER?) with reversed_labeled_tuple_body's unrelated COMMA
+   continuation - unlike the paren_module_expr-RPAREN combination above,
+   which turned out to be sequential, not simultaneous. *)
+(* Only the FUNCTION-shaped alternative is listed: the fun_expr-shaped
+   one (e.g. `(val 1 + 2 ...`) is a strict subset of what the generic
+   "closing `)` after parenthesized module expression with type
+   annotation" rule below already matches (that rule's plain
+   [paren_module_expr: ... expr_colon_package_type . RPAREN] reduce-
+   bracket is satisfied by *any* fun_expr-mediated route to
+   expr_colon_package_type, ambiguous or not - confirmed by moving a
+   fun_expr-shaped alternative here to the very top of the file per
+   MANUAL.md's shadowing-elimination test: still unreachable, shadowed
+   by that rule specifically). Keeping a FUNCTION-specific message here
+   is still worth it - "expression" alone wouldn't hint that the
+   `function | ... -> ...` you just wrote is the thing missing a `)`. *)
+| [_* /expr_colon_package_type: FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case) .
+      /expr_colon_package_type: FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case) . COLON _*
+      /expr_colon_package_type: FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case) . COLONGREATER module_type
+      /reversed_labeled_tuple_body: FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case) . COMMA _*]
+  { message "Expected closing `)` after function expression" }
+
+| /expr_colon_package_type: _* COLONGREATER . package_type
+  { message "Expected a module type after `:>`" }
+
+| [_* /open_declaration: OPEN ext list(attribute) . module_expr list(post_item_attribute)]
+  { message "Expected a module expression after `open`" }
+
+| /option(preceded(EQUAL,module_type)): EQUAL . module_type
+  { message "Expected a module type after `=`" }
+
+| [_* /module_binding: MODULE ext attributes . mkrhs(module_name) module_binding_body post_item_attributes
+      /rec_module_binding: MODULE ext attributes . REC mkrhs(module_name) module_binding_body post_item_attributes]
+  { message "Expected a module name after `module`" }
+
+| /rec_module_binding: MODULE ext attributes REC . mkrhs(module_name) module_binding_body post_item_attributes
+| /rec_module_declaration: MODULE ext attributes REC . mkrhs(module_name) COLON module_type post_item_attributes
+  { message "Expected a module name after `module rec`" }
+
+| [_* /and_module_binding: AND attributes . mkrhs(module_name) module_binding_body post_item_attributes]
+  { message "Expected a module name after `and`" }
+
+| /item_extension: LBRACKETPERCENTPERCENT . attr_id payload RBRACKET
+  { message "Expected an extension name after `[%%`" }
+
+| /payload: QUESTION . pattern _*
+  { message "Expected a pattern after `?` in a payload" }
+
+| /floating_attribute: LBRACKETATATAT . attr_id attr_payload RBRACKET
+  { message "Expected an attribute name after `[@@@`" }
+
+| [_* /include_statement(module_expr): INCLUDE ext attributes . module_expr post_item_attributes]
+  { message "Expected a module expression after `include`" }
+
+| [_* /primitive_declaration: EXTERNAL ext attributes . mkrhs(val_ident) COLON possibly_poly(core_type) EQUAL nonempty_list(raw_string) post_item_attributes]
+  { message "Expected an identifier after `external`" }
+
+| [_* /primitive_declaration: EXTERNAL ext attributes mkrhs(val_ident) . COLON possibly_poly(core_type) EQUAL nonempty_list(raw_string) post_item_attributes]
+  { message "Expected `:` after the identifier in an `external` declaration" }
+
+| /primitive_declaration: EXTERNAL ext attributes mkrhs(val_ident) COLON . possibly_poly(core_type) EQUAL nonempty_list(raw_string) post_item_attributes
+  { message "Expected a type after `:` in an `external` declaration" }
+
+| [_* /primitive_declaration: EXTERNAL ext attributes mkrhs(val_ident) COLON possibly_poly(core_type) . EQUAL nonempty_list(raw_string) post_item_attributes]
+  { message "Expected `=` after the type in an `external` declaration" }
+
+| /primitive_declaration: EXTERNAL ext attributes mkrhs(val_ident) COLON possibly_poly(core_type) EQUAL . nonempty_list(raw_string) post_item_attributes
+  { message "Expected a primitive name (a string) after `=` in an `external` declaration" }
+
+| [_* /sig_exception_declaration: EXCEPTION ext attributes . mkrhs(constr_ident) generalized_constructor_arguments attributes post_item_attributes
+      /str_exception_declaration: EXCEPTION ext attributes . mkrhs(constr_ident) EQUAL mkrhs(constr_longident) attributes post_item_attributes]
+  { message "Expected a constructor after `exception`" }
+
+| /str_exception_declaration: EXCEPTION ext attributes mkrhs(constr_ident) EQUAL . mkrhs(constr_longident) attributes post_item_attributes
+  { message "Expected a constructor name after `=`" }
+
+| /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /constr_longident: LPAREN . COLONCOLON RPAREN
+  { message "Expected `)` or `::)` after `(`" }
+
+| /constr_longident: mod_longident DOT . LPAREN COLONCOLON RPAREN
+  /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+| /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident DOT . UIDENT
+  /mk_longident(mod_ext_longident,\_): mod_ext_longident DOT . ident
+  /mk_longident(mod_ext_longident,\_): mod_ext_longident DOT . LPAREN COLONCOLON RPAREN
+  /mk_longident(mod_ext_longident,\_): mod_ext_longident DOT . val_extra_ident
+  { message "Expected an identifier or `(::)` after `.`" }
+
+| /constr_longident: mod_longident DOT LPAREN . COLONCOLON RPAREN
+  { message "Expected `::)` after `(`" }
+
+| /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident DOT . UIDENT
+| /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident DOT . LIDENT
+  /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident DOT . UIDENT
+| /mk_longident(mod_longident,LIDENT): mod_longident DOT . LIDENT
+  /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+| /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident DOT . UIDENT
+  /mk_longident(mod_ext_longident,ident): mod_ext_longident DOT . ident
+| /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+| /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
+  /mk_longident(mod_longident,val_ident): mod_longident DOT . val_ident
+  { message "Expected an identifier after `.`" }
+
+| [_* /open_description: OPEN BANG ext list(attribute) . mod_ext_longident list(post_item_attribute)]
+  { message "Expected a module path after `open !`" }
+
+| [_* /open_description: OPEN ext list(attribute) . mod_ext_longident list(post_item_attribute)]
+  { message "Expected a module path after `open`" }
+
+| [_* /module_type_declaration: MODULE TYPE ext attributes . mkrhs(ident) option(preceded(EQUAL,module_type)) post_item_attributes
+      /module_type_subst: MODULE TYPE ext attributes . mkrhs(ident) COLONEQUAL module_type post_item_attributes]
+  { message "Expected a module type name after `module type`" }
+
+| [_* /module_type_declaration: MODULE TYPE ext attributes . mkrhs(ident) option(preceded(EQUAL,module_type)) post_item_attributes]
+  { message "Expected an identifier after `module type`" }
+
+| /module_type_subst: MODULE TYPE ext attributes mkrhs(ident) COLONEQUAL . module_type post_item_attributes
+  { message "Expected a module type after `:=` to substitute a module type" }
+
+| [_* /module_subst: MODULE ext attributes . mkrhs(UIDENT) COLONEQUAL mkrhs(mod_ext_longident) post_item_attributes
+      /signature_item: MODULE ext list(attribute) . module_name _*
+      /rec_module_declaration: MODULE ext attributes . REC mkrhs(module_name) COLON module_type post_item_attributes]
+  { message "Expected a module name or `rec` after `module`" }
+
+| /module_subst: MODULE ext attributes mkrhs(UIDENT) COLONEQUAL . mkrhs(mod_ext_longident) post_item_attributes
+  { message "Expected a module path after `:=` to substitute a module" }
+
+| [_* /rec_module_declaration: MODULE ext attributes REC mkrhs(module_name) . COLON module_type post_item_attributes]
+| [_* /and_module_declaration: AND attributes mkrhs(module_name) . COLON module_type post_item_attributes]
+  { message "Expected `:` after the module name" }
+
+| /rec_module_declaration: MODULE ext attributes REC mkrhs(module_name) COLON . module_type post_item_attributes
+  { message "Expected a module type after `:` to declare a recursive module" }
+
+| [_* /and_module_declaration: AND attributes . mkrhs(module_name) COLON module_type post_item_attributes]
+  { message "Expected another module name after `and`" }
+
+| [_* /module_declaration: MODULE ext attributes mkrhs(module_name) . module_declaration_body post_item_attributes
+      /module_alias: MODULE ext attributes mkrhs(module_name) . EQUAL module_expr_alias post_item_attributes]
+  { message "Expected `:`, a functor argument, or `=` after the module name" }
+
+| /module_alias: MODULE ext attributes mkrhs(module_name) EQUAL . module_expr_alias post_item_attributes
+  { message "Expected a module path after `=` to define a module alias" }
+
+| /module_declaration_body: COLON . module_type
+  { message "Expected a module type after `:` in a module declaration" }
+
+| [_* /module_declaration_body: functor_arg . module_declaration_body]
+  { message "Expected `:` or another functor argument in a module declaration" }
+
+| [_* /include_statement(module_type): INCLUDE ext attributes . module_type post_item_attributes]
+  { message "Expected a module type after `include`" }
+
+| [_* /sig_exception_declaration: EXCEPTION ext attributes . mkrhs(constr_ident) generalized_constructor_arguments attributes post_item_attributes]
+  { message "Expected an exception name after `exception`" }
+
+| [_* /class_parameters(type_parameter): LBRACKET separated_nonempty_llist(COMMA,type_parameter) . RBRACKET]
+  { message "Expected `,` or a closing `]` after the class parameters" }
+
+| [_* /class_type_declaration: CLASS TYPE ext attributes virtual_flag formal_class_parameters . mkrhs(LIDENT) EQUAL class_signature post_item_attributes]
+  { message "Expected a class type name in a class type declaration" }
+
+| /class_type_declaration: CLASS TYPE ext attributes virtual_flag formal_class_parameters mkrhs(LIDENT) . EQUAL class_signature post_item_attributes
+  { message "Expected `=` after the class type name in a class type declaration" }
+
+| /class_type_declaration: CLASS TYPE ext attributes virtual_flag formal_class_parameters mkrhs(LIDENT) EQUAL . class_signature post_item_attributes
+  { message "Expected a class type after `=`" }
+
+| [_* /class_self_type: LPAREN core_type . RPAREN]
+| [_* /class_self_pattern: LPAREN pattern COLON core_type . RPAREN]
+  { message "Expected closing `)` after the type in `object (self : ty)`" }
+
+| /value_type: mutable_virtual_flags mkrhs(label) COLON . core_type
+  { message "Expected a type after `:` in a `val` of a class type" }
+
+| /class_sig_field: METHOD attributes private_virtual_flags mkrhs(label) . COLON possibly_poly_type post_item_attributes
+| /method_: no_override_flag attributes virtual_with_private_flag mkrhs(label) . COLON possibly_poly_type
+  { message "Expected `:` after method name" }
+
+| /class_sig_field: METHOD attributes private_virtual_flags mkrhs(label) COLON . possibly_poly_type post_item_attributes
+  { message "Expected a type after `:` in a `method` of a class type" }
+
+| [_* /class_sig_field: INHERIT attributes . class_signature post_item_attributes]
+  { message "Expected a class signature after `inherit`" }
+
+| /class_signature: LET . OPEN _*
+  { message "Expected `open` after `let` in class signature" }
+
+| /class_signature: LET OPEN override_flag attributes mkrhs(mod_longident) IN . class_signature
+  { message "Expected a class signature after `in`" }
+
+| [_* /class_signature: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) . RBRACKET clty_longident]
+  { message "Expected `,` or closing `]` in a type list" }
+
+| /class_signature: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) RBRACKET . clty_longident
+  { message "Expected a class path after the class type parameters" }
+
+| /reversed_separated_nonempty_llist(COMMA,core_type): reversed_separated_nonempty_llist(COMMA,core_type) COMMA . core_type
+  { message "Expected another type after `,` in a type list" }
+
+| [_* /class_signature: LET OPEN list(attribute) . mod_longident IN class_signature]
+| [_* /class_expr: LET OPEN list(attribute) . mod_longident IN class_expr]
+  { message "Expected a module path after `let open`" }
+
+| [_* /class_signature: LET OPEN BANG list(attribute) . mod_longident IN class_signature]
+| [_* /class_expr: LET OPEN BANG list(attribute) . mod_longident IN class_expr]
+  { message "Expected a module path after `let open !`" }
+
+(*| [_* /class_signature: LET OPEN list(attribute) mod_longident . IN class_signature
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
+| [_* /class_signature: LET OPEN BANG list(attribute) mod_longident . IN class_signature
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
+  { message "Expected `.` or `in` after the module path in `let open`" }*)
+
+| [_* /constrain_field: core_type . EQUAL core_type]
+  { message "Expected `=` after the type in `constraint` field" }
+
+| /constrain_field: core_type EQUAL . core_type
+  { message "Expected another type after `=` in `constraint` field" }
+
+| op=OBJECT; attributes; class_self_type; [_* /class_signature: OBJECT attributes class_sig_body . END]
+| op=OBJECT; attributes; [_* /class_signature: OBJECT attributes class_sig_body . END]
+| op=OBJECT; [_* /class_signature: OBJECT attributes class_sig_body . END]
+  { message "Expected a class type field or a closing `end` in class type body"
+      ~sub:[ mkloc $startpos(op) $endpos(op), "opened here" ] }
+
+| [_* /and_class_type_declaration: AND attributes virtual_flag formal_class_parameters . mkrhs(LIDENT) EQUAL class_signature post_item_attributes]
+  { message "Expected a class type name in a class type declaration" }
+
+| /and_class_type_declaration: AND attributes virtual_flag formal_class_parameters mkrhs(LIDENT) . EQUAL class_signature post_item_attributes
+  { message "Expected `=` after the class type name in a class type declaration" }
+
+| /and_class_type_declaration: AND attributes virtual_flag formal_class_parameters mkrhs(LIDENT) EQUAL . class_signature post_item_attributes
+  { message "Expected a class signature after `=`" }
+
+| [_* /class_description: CLASS ext attributes virtual_flag formal_class_parameters . mkrhs(LIDENT) COLON class_type post_item_attributes]
+  { message "Expected a class name in a class declaration" }
+
+| /class_description: CLASS ext attributes virtual_flag formal_class_parameters mkrhs(LIDENT) . COLON class_type post_item_attributes
+  { message "Expected `:` after the class name in a class declaration" }
+
+| /class_description: CLASS ext attributes virtual_flag formal_class_parameters mkrhs(LIDENT) COLON . class_type post_item_attributes
+| /and_class_description: AND attributes virtual_flag formal_class_parameters mkrhs(LIDENT) COLON . class_type post_item_attributes
+| /class_fun_binding: COLON . class_type EQUAL class_expr
+  { message "Expected a class type after `:`" }
+
+| /class_type: LIDENT COLON . tuple_type MINUSGREATER class_type
+  { message "Expected a type after the label in a class type" }
+
+| [_* /class_type: LIDENT COLON tuple_type . MINUSGREATER class_type]
+| [_* /class_type: optlabel tuple_type . MINUSGREATER class_type]
+  { message "Expected `->` after label type" }
+
+| /class_type: LIDENT COLON tuple_type MINUSGREATER . class_type
+| /class_type: tuple_type MINUSGREATER . class_type
+| /class_type: optlabel tuple_type MINUSGREATER . class_type
+  { message "Expected a class type after `->`" }
+
+| /class_signature: LBRACKET . reversed_separated_nonempty_llist(COMMA,core_type) RBRACKET clty_longident
+  /delimited_type_supporting_local_open: LBRACKET . tag_field RBRACKET
+  /\_: LBRACKET . BAR row_field_list RBRACKET
+  /\_: LBRACKET . row_field BAR row_field_list RBRACKET
+  { message "Expected `[` to introduce class type parameters" }
+
+| /class_parameters(core_type): LBRACKET . _*
+  { message "Expected a type list after `[`" }
+
+| [_* /class_type: tuple_type . MINUSGREATER class_type]
+| [_* /function_type: LIDENT COLON tuple_type . MINUSGREATER function_type]
+| [_* /function_type: _* RPAREN . MINUSGREATER function_type]
+  { message "Expected `->` after type" }
+
+| [_* /class_type: optlabel . tuple_type MINUSGREATER class_type]
+  { message "Expected a parameter type after the label" }
+
+| [_* /and_class_description: AND attributes virtual_flag formal_class_parameters . mkrhs(LIDENT) COLON class_type post_item_attributes]
+  { message "Expected another class identifier in class descriptions" }
+
+| /and_class_description: AND attributes virtual_flag formal_class_parameters mkrhs(LIDENT) . COLON class_type post_item_attributes
+  { message "Expected `:` after class identifier in class descriptions" }
+
+| [_* /generic_and_type_declaration(type_kind): AND attributes . type_parameters mkrhs(LIDENT) type_kind constraints post_item_attributes]
+| [_* /generic_and_type_declaration(type_subst_kind): AND attributes . type_parameters mkrhs(LIDENT) type_subst_kind constraints post_item_attributes]
+  { message "Expected a type name after `and`" }
+
+| /generic_and_type_declaration(type_subst_kind): AND attributes type_parameters mkrhs(LIDENT) . type_subst_kind constraints post_item_attributes
+  { message "Expected `:=` after the identifier in a type substitution" }
+
+| /type_subst_kind: COLONEQUAL . nonempty_type_kind
+  { message "Expected a type definition after `:=`" }
+
+| /constr_extra_nonprefix_ident: LBRACKET . RBRACKET
+  /delimited_type_supporting_local_open: LBRACKET . tag_field RBRACKET
+  /\_: LBRACKET . BAR row_field_list RBRACKET
+  /\_: LBRACKET . row_field BAR row_field_list RBRACKET
+  { message "Expected a row field or `]` after `[`" }
+
+| /nonempty_type_kind: core_type EQUAL . constructor_declarations
+  /nonempty_type_kind: core_type EQUAL . DOTDOT
+  /nonempty_type_kind: core_type EQUAL . LBRACE label_declarations RBRACE
+  /nonempty_type_kind: core_type EQUAL . PRIVATE constructor_declarations
+  /nonempty_type_kind: core_type EQUAL . PRIVATE DOTDOT
+  /nonempty_type_kind: core_type EQUAL . PRIVATE LBRACE label_declarations RBRACE
+  { message "Expected a constructor declaration, `{`, `private`, or `..` after `=`" }
+
+| /nonempty_type_kind: core_type EQUAL PRIVATE . constructor_declarations
+  /nonempty_type_kind: core_type EQUAL PRIVATE . DOTDOT
+  /nonempty_type_kind: core_type EQUAL PRIVATE . LBRACE label_declarations RBRACE
+  { message "Expected a constructor declaration, `{`, or `..` after `private`" }
+
+| [_* /nonempty_type_kind: LBRACE label_declarations . RBRACE]
+| [_* /nonempty_type_kind: core_type EQUAL PRIVATE LBRACE label_declarations . RBRACE]
+| [_* /nonempty_type_kind: core_type EQUAL LBRACE label_declarations . RBRACE]
+| [_* /nonempty_type_kind: PRIVATE LBRACE label_declarations . RBRACE]
+  { match token with
+    | COMMA -> message "Expected `;` (not `,`) to separate record fields, or closing `}`"
+    | _ -> message "Expected `;` or closing `}` after the record field" }
+
+| [_* /class_declaration: CLASS ext attributes virtual_flag formal_class_parameters . mkrhs(LIDENT) class_fun_binding post_item_attributes]
+  { message "Expected a class name in a class definition" }
+
+| /class_declaration: CLASS ext attributes virtual_flag formal_class_parameters mkrhs(LIDENT) . class_fun_binding post_item_attributes
+| /and_class_declaration: AND attributes virtual_flag formal_class_parameters mkrhs(LIDENT) . class_fun_binding post_item_attributes
+  { message "Expected `=`, `:` or binding pattern after the class name in class definition" }
+
+| /class_fun_binding: EQUAL . class_expr
+| /class_fun_binding: COLON class_type EQUAL . class_expr
+  { message "Expected a class expression after `=`" }
+
+| [_* /value: no_override_flag attributes virtual_with_mutable_flag . mkrhs(label) COLON core_type]
+  { message "Expected a value name after `val virtual`" }
+
+| /value: no_override_flag attributes virtual_with_mutable_flag mkrhs(label) . COLON core_type
+  { message "Expected `:` after virtual value name" }
+
+| /value: no_override_flag attributes virtual_with_mutable_flag mkrhs(label) COLON . core_type
+  { message "Expected a type after `:` in a value definition" }
+
+| [_* /value: BANG list(attribute) mutable_flag . LIDENT _*]
+  { message "Expected a value name after `val !`" }
+
+| /value: override_flag attributes mutable_flag mkrhs(label) . _*
+  { message "Expected `=` or `:` after the field name" }
+
+| [_* /value: override_flag attributes mutable_flag mkrhs(label) type_constraint . EQUAL seq_expr]
+  { message "Expected `=` after the type constraint in a value definition" }
+
+| /value: override_flag attributes mutable_flag mkrhs(label) _* EQUAL . seq_expr
+  { message "Expected an expression after `=` to define a value" }
+
+| [_* /method_: BANG list(attribute) private_flag . LIDENT _*]
+  { message "Expected a method name after `method !`" }
+
+| /method_: no_override_flag attributes virtual_with_private_flag mkrhs(label) COLON . possibly_poly_type
+  { message "Expected a type after `:` in a method definition" }
+
+| /method_: override_flag attributes private_flag mkrhs(label) . _*
+  { message "Expected `=`, parameter, or `:` after method name" }
+
+| /method_: override_flag attributes private_flag mkrhs(label) COLON TYPE . lident_list _*
+  { message "Expected a type name after `type`" }
+
+| [_* /method_: override_flag attributes private_flag mkrhs(label) COLON TYPE lident_list . DOT core_type EQUAL seq_expr]
+  { message "Expected `.` after polymorphic types" }
+
+| [_* /method_: override_flag attributes private_flag mkrhs(label) COLON _* . EQUAL seq_expr]
+  { message "Expected `=` after the method type" }
+
+| /method_: override_flag attributes private_flag mkrhs(label) COLON _* EQUAL . seq_expr
+  { message "Expected an expression after `=` to define a method" }
+
+| [_* /class_field: INITIALIZER attributes . seq_expr post_item_attributes]
+  { message "Expected an expression after `initializer`" }
+
+| [_* /class_field: INHERIT BANG list(attribute) . class_expr option(preceded(AS,mkrhs(LIDENT))) list(post_item_attribute)]
+  { message "Expected a class expression after `inherit !`" }
+
+| /class_simple_expr: LPAREN . class_expr _*
+  { message "Expected a class expression after `(`" }
+
+| [_* /let_bindings(no_ext): LET PERCENT attr_id list(attribute) rec_flag . let_binding_body list(post_item_attribute)]
+  { message "Expected a let-binding after the extension name" }
+
+(*| [_* /class_expr: LET OPEN BANG list(attribute) mod_longident . IN class_expr
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
+  { message "Expected `.` or `in` after the module path" }*)
+
+| /class_expr: LET OPEN override_flag attributes mkrhs(mod_longident) IN . class_expr
+| /class_expr: let_bindings(no_ext) IN . class_expr
+  { message "Expected a class expression after `in`" }
+
+| [_* /class_simple_expr: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) . RBRACKET class_longident]
+  { message "Expected closing `]` after type list" }
+
+| /class_simple_expr: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) RBRACKET . class_longident
+  { message "Expected a class name after the class parameters" }
+
+| [_* /class_fun_def: simple_param_pattern . MINUSGREATER class_expr
+      /class_fun_def: simple_param_pattern . class_fun_def]
+  { message "Expected `->` after parameter in class definition" }
+
+| /class_fun_def: simple_param_pattern MINUSGREATER . class_expr
+  { message "Expected a class expression after `->`" }
+
+(*| [_* /class_expr: let_bindings(no_ext) . IN class_expr]
+  { message "Expected `in` after the let-bindings" }*)
+
+(*| [_* /class_expr: LET OPEN list(attribute) mod_longident . IN class_expr
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
+  { message "Expected `in` after the module path" }*)
+
+| [_* /let_bindings(no_ext): LET list(attribute) rec_flag . let_binding_body list(post_item_attribute)]
+  { message "Expected a binding pattern after `let`" }
+
+| [_* /class_simple_expr: LPAREN class_expr . RPAREN
+      /class_simple_expr: LPAREN class_expr . COLON class_type RPAREN]
+  { message "Expected closing `)` or `:` after class expression" }
+
+| /class_simple_expr: LPAREN class_expr COLON . class_type RPAREN
+  { message "Expected a class type after `:` in a class expression" }
+
+| [_* /class_simple_expr: LPAREN class_expr COLON class_type . RPAREN]
+  { message "Expected closing `)` after class type" }
+
+| [_* /class_field: INHERIT list(attribute) . class_expr option(preceded(AS,mkrhs(LIDENT))) list(post_item_attribute)]
+  { message "Expected a class expression after `inherit`" }
+
+| [_* /class_field: CONSTRAINT attributes . constrain_field post_item_attributes]
+  { message "Expected a type after `constraint`" }
+
+| op=OBJECT; attributes; class_self_pattern; [_* /class_simple_expr: OBJECT attributes class_structure . END]
+| op=OBJECT; attributes; [_* /class_simple_expr: OBJECT attributes class_structure . END]
+| op=OBJECT; [_* /class_simple_expr: OBJECT attributes class_structure . END]
+  { message "Expected a class field or a closing `end` in class body"
+      ~sub:[ mkloc $startpos(op) $endpos(op), "opened here" ] }
+
+| [_* /class_fun_binding: COLON class_type . EQUAL class_expr]
+  { message "Expected `=` after class type" }
+
+| [_* /class_fun_binding: simple_param_pattern . class_fun_binding]
+  { message "Expected `=`, `:` or another binding pattern in class definition" }
+
+| [_* /and_class_declaration: AND attributes virtual_flag formal_class_parameters . mkrhs(LIDENT) class_fun_binding post_item_attributes]
+  { message "Expected an identifier after the class parameters" }
+
+| [_* /floating_attribute: LBRACKETATATAT attr_id attr_payload . RBRACKET]
+| [_* /post_item_attribute: LBRACKETATAT attr_id attr_payload . RBRACKET]
+| [_* /attribute: LBRACKETAT attr_id attr_payload . RBRACKET]
+  { message "Expected closing `]` after the attribute" }
+
+| [_* /item_extension: LBRACKETPERCENTPERCENT attr_id payload . RBRACKET]
+| [_* /extension: LBRACKETPERCENT attr_id payload . RBRACKET]
+  { message "Expected closing `]` after extension" }
+
+
+| /labeled_tuple_pat_element_list(pattern): TILDE LIDENT . COMMA _*
+  /reversed_labeled_tuple_pattern(pattern): TILDE LIDENT . COMMA DOTDOT
+  { message "Expected `,` in labeled tuple pattern" }
+
+| [_* /class_self_pattern: LPAREN pattern . RPAREN
+      /class_self_pattern: LPAREN pattern . COLON core_type RPAREN
+      /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
+      /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT]
+  { message "Expected closing `)`, `:`, or `,` after `self` in `object (self)`" }
+
+| /class_self_pattern: LPAREN pattern COLON . core_type RPAREN
+  { message "Expected a type after `:` in `object (self : ty)`" }
+
+| op=OBJECT; ext_attributes; class_self_pattern; [_* /simple_expr_attrs: OBJECT ext_attributes class_structure . END]
+| op=OBJECT; ext_attributes; [_* /simple_expr_attrs: OBJECT ext_attributes class_structure . END]
+| op=OBJECT; ext; [_* /simple_expr_attrs: OBJECT ext_attributes class_structure . END]
+| op=OBJECT; [_* /simple_expr_attrs: OBJECT ext_attributes class_structure . END]
+  { message "Expected closing `end` after the object expression"
+      ~sub:[ mkloc $startpos(op) $endpos(op), "opened here" ] }
+
+| /reversed_labeled_tuple_body: TILDE LIDENT . COMMA _*
+  { message "Expected `,` after labeled element" }
+
+| [_* /fun_expr_attrs: TRY ext_attributes seq_expr . WITH match_cases]
+  { message "Expected `with` after the expression in a `try` expression" }
+
+| /fun_expr_attrs: TRY ext_attributes seq_expr WITH . match_cases
+  { message "Expected an exception pattern after `with` in a `try` expression" }
+
+| /extension_constructor_rebind(BAR): BAR . mkrhs(constr_ident) EQUAL mkrhs(constr_longident) attributes
+  /generic_constructor_declaration(BAR): BAR . mkrhs(constr_ident) generalized_constructor_arguments attributes
+  { message "Expected a constructor after `|`" }
+
+| /extension_constructor_rebind(BAR): BAR mkrhs(constr_ident) EQUAL . mkrhs(constr_longident) attributes
+| /extension_constructor_rebind(epsilon): epsilon mkrhs(constr_ident) EQUAL . mkrhs(constr_longident) attributes
+  { message "Expected a constructor path after `=`" }
+
+| [_* /object_type: LESS meth_list . GREATER]
+  { message "Expected closing `>` after method list" }
+
+| [_* /actual_type_parameters: LPAREN separated_nontrivial_llist(COMMA,core_type) . RPAREN]
+  { message "Expected closing `)` after type list" }
+
+| /atomic_type: LPAREN reversed_separated_nontrivial_llist(COMMA,core_type) RPAREN . _*
+  { message "Expected a type path after the parenthesized type list" }
+
+| /atomic_type: LPAREN reversed_separated_nontrivial_llist(COMMA,core_type) RPAREN HASH . clty_longident
+  { message "Expected a class type path after `#`" }
+
+| /reversed_separated_nontrivial_llist(COMMA,core_type): reversed_separated_nontrivial_llist(COMMA,core_type) COMMA . core_type
+| /reversed_separated_nontrivial_llist(COMMA,core_type): core_type COMMA . core_type
+  { message "Expected a type after `,` in a type list" }
+
+| [_* /delimited_type_supporting_local_open: LPAREN core_type . RPAREN
+      /reversed_separated_nontrivial_llist(COMMA,core_type): core_type . COMMA core_type]
+  { message "Expected closing `)` or `,` in a type list" }
+
+(* A bare (unqualified) type name is still ambiguous at this exact point
+   between a plain declaration (wants `=`, in a .ml; `=` or `:=` in a
+   .mli) and a type extension (wants `+=`) - the automaton hasn't reduced
+   into type_longident yet, so both/all interpretations are simultaneously
+   live items in one state. Once a qualified path has been shifted
+   (below), only the extension reading survives, and type_longident has
+   already reduced by the point the error is detected - so its value can
+   no longer be inspected there (LRGrep's reduction capture only exposes
+   locations, never values, confirmed via src/kernel/transl.ml's Reduce
+   case: it only ever creates Start_loc/End_loc registers); only the
+   token shape at this earlier, still-unreduced point lets the cases be
+   told apart at all.
+
+   Rather than hand-merging the simultaneous items into one big
+   AND-bracket per case, exploit the implication between them instead: a
+   bare type name that can be followed by `:=` (only ever true in a
+   .mli, for a `type t := ...` substitution) can *always* also be
+   followed by `=` and `+=` at this exact position - and a bare name
+   that can be followed by `=` can *always* also be followed by `+=`.
+   So each rule below just checks its own single, most-specific
+   property, in decreasing order of specificity - each item then
+   directly names the very operator its own message mentions, instead of
+   needing three-item conjunctions verified only indirectly through
+   `interpret --items`. Whichever check matches first is, by this
+   implication chain, exactly as precise as the hand-merged version
+   (confirmed: identical bytecode size and zero corpus differences
+   either way). *)
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext attributes no_nonrec_flag type_parameters mkrhs(LIDENT) . type_subst_kind constraints post_item_attributes]
+  { message "Expected `=`, `:=`, or `+=` after the type name" }
+
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext attributes nonrec_flag type_parameters mkrhs(LIDENT) . type_kind constraints post_item_attributes]
+  { message "Expected `=` or `+=` after the type name" }
+
+| [_* /generic_and_type_declaration(type_kind): AND attributes type_parameters mkrhs(LIDENT) . type_kind constraints post_item_attributes]
+  { message "Expected `=` after the type name" }
+
+| [_* / TYPE ext attributes no_nonrec_flag type_parameters mkrhs(type_longident) . PLUSEQ _*]
+  { message "Expected `+=` after the type name" }
+
+| [_* / TYPE ext attributes no_nonrec_flag type_parameters mkrhs(type_longident) PLUSEQ private_flag . _*]
+  { message "Expected a constructor after `+=` in a type extension" }
+
+(* `let` in a signature: a common mistake when writing an interface. *)
+| [_* /module_type: SIG attributes signature . END] @ LET
+| [_* /interface: signature . EOF] @ LET
+  { message "`let` definitions are not allowed in a signature; \
+             declare values with `val name : type`" }
+
+| op=SIG; attributes; [_* /module_type: SIG attributes signature . END]
+| op=SIG; [_* /module_type: SIG attributes signature . END]
+  { message "Expected closing `end` or a signature item"
+      ~sub:[ mkloc $startpos(op) $endpos(op), "opened here" ] }
+
+| [_* /fun_expr_attrs: WHILE ext_attributes . seq_expr do_done_expr]
+  { message "Expected an expression after `while`" }
+
+| WHILE; ext_attributes; c=[seq_expr]
+  { keyword_message ~keyword:"`do`" ~header:"condition"
+      "Expected `do` after the expression in a `while` loop" c }
+
+| [_* /fun_expr_attrs: WHILE ext_attributes seq_expr . do_done_expr]
+  { message "Expected `do` after the expression in a `while` loop" }
+
+| /fun_expr: WHILE _* DO . seq_expr DONE
+  { message "Expected an expression after `do` in a `while` loop" }
+
+| [_* /fun_expr: WHILE _* DO seq_expr . DONE]
+  { message "Expected `done` after the expression in a `while` loop" }
+
+| [_* /implementation: structure . EOF]
+  { message "Expected a structure item or end of file" }
+
+| [_* /interface: signature . EOF]
+  { message "Expected a signature item or end of file" }
+
+| /parse_any_longident': . parse_any_longident
+| /parse_mod_longident': . parse_mod_longident
+  { message "Expected a module path" }
+
+| /constr_extra_nonprefix_ident: LPAREN . RPAREN
+  /mk_longident(mod_ext_longident,\_): LPAREN . COLONCOLON RPAREN
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected an operator, `::`, or `)`" }
+
+| [_* /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT
+      /mk_longident(mod_ext_longident,\_): mod_ext_longident . DOT _*]
+  { message "Expected `.` after the module path" }
+
+| /mk_longident(mod_ext_longident,\_): mod_ext_longident DOT LPAREN . COLONCOLON RPAREN
+  /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected an operator or `::` after `.(`" }
+
+| /mk_longident(mod_ext_longident,\_): mod_ext_longident DOT LPAREN COLONCOLON . RPAREN
+  { message "Expected `)` after `::`" }
+
+| [_* /parse_any_longident: any_longident . EOF]
+  { message "Expected the end of the module path" }
+
+| /parse_constr_longident': . parse_constr_longident
+  { message "Expected a constructor path" }
+
+| [_* /parse_constr_longident: constr_longident . EOF]
+  { message "Expected the end of the constructor path" }
+
+| /parse_core_type': . parse_core_type
+  { message "Expected a type" }
+
+| [_* /parse_core_type: core_type . EOF]
+  { message "Expected the end of the type" }
+
+| /parse_expression': . parse_expression
+  { message "Expected an expression" }
+
+| [_* /parse_expression: seq_expr . EOF]
+  { message "Expected the end of the expression" }
+
+| /parse_mod_ext_longident': . parse_mod_ext_longident
+  { message "Expected an extended module path" }
+
+| [_* /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT
+      /parse_mod_ext_longident: mod_ext_longident . EOF]
+| [_* /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT
+      /parse_mod_longident: mod_longident . EOF]
+  { message "Expected `.` or end of module path" }
+
+| /parse_module_expr': . parse_module_expr
+  { message "Expected a module expression" }
+
+| [_* /parse_module_expr: module_expr . EOF]
+  { message "Expected the end of the module expression" }
+
+| /parse_module_type': . parse_module_type
+  { message "Expected a module type" }
+
+| [_* /parse_module_type: module_type . EOF]
+  { message "Expected the end of the module type" }
+
+| /parse_mty_longident': . parse_mty_longident
+  { message "Expected a module type path" }
+
+| [_* /parse_mty_longident: mty_longident . EOF]
+  { message "Expected the end of the module type path" }
+
+| /parse_pattern': . parse_pattern
+  { message "Expected a pattern" }
+
+| [_* /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
+      /parse_pattern: pattern . EOF
+      /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT]
+  { message "Expected the end of input or `,` after the pattern" }
+
+| /parse_val_longident': . parse_val_longident
+  { message "Expected a value path" }
+
+| [_* /parse_val_longident: val_longident . EOF]
+  { message "Expected the end of input after the identifier" }
+
+| [_* /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT
+      /mk_longident(mod_longident,val_ident): mod_longident . DOT val_ident]
+  { message "Expected `.` after the identifier" }
+
+| [_* /toplevel_phrase: toplevel_directive . SEMISEMI]
+  { message "Expected `;;` after the directive" }
+
+| [_* /toplevel_phrase: extra_str(text_str(str_exp)) . SEMISEMI]
+| [_* /toplevel_phrase: list(text_str(structure_item)) . SEMISEMI]
+  { message "Expected `;;` after the phrase" }
+
+| [_* /use_file: seq_expr list(post_item_attribute) list(use_file_element) . EOF]
+| [_* /use_file: list(use_file_element) . EOF]
+  { message "Expected a structure item or end of file" }
+
+| [_* /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
+      /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
+  @ OF
+  { message "Expected `.` to continue the module path, or `|` to introduce another constructor" }
+
+| [_* /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
+      /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
+| [_* /mk_longident(mod_longident,LIDENT): mod_longident . DOT LIDENT
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
+| [_* /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT
+      /mk_longident(mod_ext_longident,ident): mod_ext_longident . DOT ident]
+  { message "Expected `.` to continue the module path" }
+
+| [_* /module_type: _* . MINUSGREATER module_type]
+| [_* /module_expr: _* . MINUSGREATER module_expr]
+  { message "Expected `->` after the functor arguments" }
+
+| /val_extra_ident: LPAREN . operator RPAREN
+  { message "Expected an operator after `(` in a value identifier" }
+
+| /generic_constructor_declaration(BAR): BAR . mkrhs(constr_ident) generalized_constructor_arguments attributes
+  { match token with
+    | LIDENT _ -> message "Constructor names must start with an uppercase letter"
+    | _ -> message "Expected a constructor name after `|`" }
+
+| [_* /delimited_type_supporting_local_open: LPAREN core_type . RPAREN]
+  { message "Expected closing `)` after type expression" }
+
+| /delimited_type_supporting_local_open: LBRACKET . tag_field RBRACKET
+  /\_: LBRACKET . BAR row_field_list RBRACKET
+  /\_: LBRACKET . row_field BAR row_field_list RBRACKET
+  { message "Expected a row field after `[`" }
+
+| /constr_extra_nonprefix_ident: LBRACKET . RBRACKET
+  { message "Expected `]` after `[`" }
+
+(* The [type_variance] can be empty: when the reduction consumed nothing,
+   there is no annotation to talk about. *)
+| LPAREN; v=[_* /type_parameter: type_variance . type_variable]
+| COMMA; v=[_* /type_parameter: type_variance . type_variable]
+  %partial {
+    match $startpos(v) with
+    | None -> some_message "Expected a type parameter (e.g. `'a`)"
+    | Some _ -> None
+  }
+
+(* The reductions to an empty variance can consume other frames (e.g. the
+   attributes of `type [@a] = int`): look at what was consumed. *)
+| [_* /type_parameter: type_variance . type_variable
+   <- _*; (PLUS | MINUS | BANG | INFIXOP2)]
+  { message "Expected a type variable after the variance annotation" }
+
+| [_* /type_parameter: type_variance . type_variable]
+  { message "Expected a type name after `type`" }
+
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) NONREC type_parameters . LIDENT COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /signature_item: TYPE ext list(attribute) NONREC type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
+| [_* /generic_and_type_declaration(type_kind): AND attributes type_parameters . mkrhs(LIDENT) type_kind constraints post_item_attributes]
+| [_* /generic_and_type_declaration(type_subst_kind): AND attributes type_parameters . mkrhs(LIDENT) type_subst_kind constraints post_item_attributes]
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /local_structure_item: TYPE ext list(attribute) type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) type_parameters . LIDENT COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /signature_item: TYPE ext list(attribute) type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
+  { message "Expected a type name after the type parameters" }
+
+(* Replace builtin grammatical rule reporting unclosed parenthesis *)
+| lp=LPAREN; [_* / _* . RPAREN _*]
+  { message "Unclosed parenthesis"
+      ~sub:[ mkloc $startpos(lp) $endpos(lp), "opened here" ] }

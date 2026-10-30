@@ -100,9 +100,12 @@ parsing_SOURCES = $(addprefix parsing/, \
   ast_iterator.mli ast_iterator.ml \
   builtin_attributes.mli builtin_attributes.ml \
   camlinternalMenhirLib.mli camlinternalMenhirLib.ml \
+  camlinternalLrgrep_runtime.mli camlinternalLrgrep_runtime.ml \
+  parser_types.mli \
   parser.mly \
   lexer.mll \
   pprintast.mli pprintast.ml \
+  parse_errors.mli parse_errors.ml \
   parse.mli parse.ml \
   printast.mli printast.ml \
   ast_mapper.mli ast_mapper.ml \
@@ -1824,9 +1827,26 @@ endif
 parsing/parser.mli: boot/menhir/parser.mli
 	$(V_GEN)sed "s/MenhirLib/CamlinternalMenhirLib/g" $< > $@
 
+# The messages of the syntax errors, compiled by LRgrep from
+# parsing/parse_errors.lrgrep, and the runtime of LRgrep, renamed into
+# CamlinternalLrgrep_runtime for the same reason as MenhirLib.
+
+parsing/camlinternalLrgrep_runtime.ml: boot/lrgrep/lrgrep_runtime.ml
+	$(V_GEN)cp $< $@
+parsing/camlinternalLrgrep_runtime.mli: boot/lrgrep/lrgrep_runtime.mli
+	$(V_GEN)cp $< $@
+parsing/parse_errors.ml: boot/lrgrep/parse_errors.ml parsing/parse_errors.lrgrep
+ifeq "$(OCAML_DEVELOPMENT_VERSION)" "true"
+	@-tools/check-parser-uptodate-or-warn.sh
+endif
+	$(V_GEN)sed "s/Lrgrep_runtime/CamlinternalLrgrep_runtime/g" $< > $@
+
 beforedepend:: parsing/camlinternalMenhirLib.ml \
   parsing/camlinternalMenhirLib.mli \
-  parsing/parser.ml parsing/parser.mli
+  parsing/parser.ml parsing/parser.mli \
+  parsing/camlinternalLrgrep_runtime.ml \
+  parsing/camlinternalLrgrep_runtime.mli \
+  parsing/parse_errors.ml
 
 partialclean:: partialclean-menhir
 
@@ -2434,9 +2454,12 @@ ocamlprof_SOURCES = \
   ast_iterator.mli ast_iterator.ml \
   builtin_attributes.mli builtin_attributes.ml \
   camlinternalMenhirLib.mli camlinternalMenhirLib.ml \
+  camlinternalLrgrep_runtime.mli camlinternalLrgrep_runtime.ml \
+  parser_types.mli \
   parser.mli parser.ml \
   lexer.mli lexer.ml \
   pprintast.mli pprintast.ml \
+  parse_errors.mli parse_errors.ml \
   parse.mli parse.ml \
   ocamlprof.mli ocamlprof.ml
 

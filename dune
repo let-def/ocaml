@@ -50,10 +50,11 @@
 
    ;; PARSING
    location longident docstrings syntaxerr ast_helper camlinternalMenhirLib
+   camlinternalLrgrep_runtime parse_errors
    ast_iterator builtin_attributes parser lexer parse printast pprintast
    ast_mapper attr_helper ast_invariants depend
    ; manual update: mli only files
-   asttypes parsetree
+   asttypes parsetree parser_types
 
    ;; TYPING
    ident path primitive shape shape_reduce types btype oprint subst predef

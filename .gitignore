@@ -224,6 +224,10 @@ META
 
 /parsing/parser.ml
 /parsing/parser.mli
+/parsing/parser.cmly
+/parsing/parse_errors.ml
+/parsing/camlinternalLrgrep_runtime.ml
+/parsing/camlinternalLrgrep_runtime.mli
 /parsing/lexer.ml
 /parsing/lexer_tmp.mll
 /parsing/lexer_tmp.ml

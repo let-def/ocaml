@@ -13,6 +13,9 @@ link:https://gallium.inria.fr/~fpottier/menhir/[menhir] parser
 generator, which is an external tool that you need to install if you
 wish to modify the parser.
 
+link:parse_errors.lrgrep[parse_errors.lrgrep]:: This file contains the
+messages of the syntax errors, compiled by LRgrep.
+
 == Working on the parser grammar
 
 To avoid depending on an external tool, the compiler build system does
@@ -24,6 +27,21 @@ If you change link:parser.mly[], you need to run the `promote-menhir`
 target of the root Makefile to rebuild the compiler parser. See
 link:../Makefile.menhir[] for the details of the various
 Menhir-related targets and their use.
+
+=== Syntax error messages
+
+The messages of the syntax errors are specified in
+link:parse_errors.lrgrep[], and compiled by
+link:https://github.com/let-def/lrgrep[LRgrep] against the automaton
+of the grammar. A rule of the specification matches the stack of the
+parser when it fails, and the token that caused the failure; its
+action computes the message, quoting code between backquotes. When no
+rule matches, the error is a bare "Syntax error".
+
+The compiled messages are versioned in `boot/lrgrep`, with the runtime
+of LRgrep, which is renamed `CamlinternalLrgrep_runtime`. They depend
+on the automaton: `promote-menhir` compiles them again. After a change
+of link:parse_errors.lrgrep[] alone, run the `promote-lrgrep` target.
 
 === Testing the grammar
 

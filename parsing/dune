@@ -43,6 +43,24 @@
    (with-stdout-to %{targets}
      (bash "cat %{dep} | sed 's/MenhirLib/CamlinternalMenhirLib/g'"))))
 
+(rule
+ (targets camlinternalLrgrep_runtime.ml)
+ (mode    fallback)
+ (action  (copy# ../boot/lrgrep/lrgrep_runtime.ml %{targets})))
+
+(rule
+ (targets camlinternalLrgrep_runtime.mli)
+ (mode    fallback)
+ (action  (copy# ../boot/lrgrep/lrgrep_runtime.mli %{targets})))
+
+(rule
+ (targets parse_errors.ml)
+ (mode    fallback)
+ (deps    (:dep ../boot/lrgrep/parse_errors.ml))
+ (action
+   (with-stdout-to %{targets}
+     (bash "cat %{dep} | sed 's/Lrgrep_runtime/CamlinternalLrgrep_runtime/g'"))))
+
 (ocamllex
  (modules lexer)
  (mode fallback))

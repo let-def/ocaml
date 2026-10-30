@@ -64,3 +64,17 @@ then
   echo "    make promote-menhir"
   echo
 fi
+
+# The same for the messages of the syntax errors, compiled by LRgrep
+SOURCE_MTIME=$(mtime parsing/parse_errors.lrgrep)
+GENERATED_MTIME=$(mtime boot/lrgrep/parse_errors.ml)
+if test -n "$SOURCE_MTIME" -a -n "$GENERATED_MTIME" &&
+   test "$SOURCE_MTIME" -gt $(( GENERATED_MTIME + 10 ))
+then
+  echo
+  tput setaf 3; tput bold; printf "Warning: "; tput sgr0
+  echo "Your 'parse_errors.lrgrep' file is more recent than the messages"
+  echo "in 'boot/'. Its changes will be ignored unless you run:"
+  echo "    make promote-lrgrep"
+  echo
+fi

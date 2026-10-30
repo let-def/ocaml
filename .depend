@@ -371,6 +371,11 @@ parsing/builtin_attributes.cmi : \
     parsing/parsetree.cmi \
     utils/misc.cmi \
     parsing/location.cmi
+parsing/camlinternalLrgrep_runtime.cmo : \
+    parsing/camlinternalLrgrep_runtime.cmi
+parsing/camlinternalLrgrep_runtime.cmx : \
+    parsing/camlinternalLrgrep_runtime.cmi
+parsing/camlinternalLrgrep_runtime.cmi :
 parsing/camlinternalMenhirLib.cmo : \
     parsing/camlinternalMenhirLib.cmi
 parsing/camlinternalMenhirLib.cmx : \
@@ -463,6 +468,7 @@ parsing/parse.cmo : \
     parsing/syntaxerr.cmi \
     parsing/pprintast.cmi \
     parsing/parser.cmi \
+    parsing/parse_errors.cmi \
     utils/misc.cmi \
     parsing/location.cmi \
     parsing/lexer.cmi \
@@ -474,6 +480,7 @@ parsing/parse.cmx : \
     parsing/syntaxerr.cmx \
     parsing/pprintast.cmx \
     parsing/parser.cmx \
+    parsing/parse_errors.cmx \
     utils/misc.cmx \
     parsing/location.cmx \
     parsing/lexer.cmx \
@@ -484,9 +491,37 @@ parsing/parse.cmx : \
 parsing/parse.cmi : \
     parsing/parsetree.cmi \
     parsing/longident.cmi
+parsing/parse_errors.cmo : \
+    parsing/pprintast.cmi \
+    parsing/parsetree.cmi \
+    parsing/parser_types.cmi \
+    parsing/parser.cmi \
+    parsing/longident.cmi \
+    parsing/location.cmi \
+    parsing/lexer.cmi \
+    parsing/camlinternalLrgrep_runtime.cmi \
+    parsing/asttypes.cmi \
+    parsing/ast_helper.cmi \
+    parsing/parse_errors.cmi
+parsing/parse_errors.cmx : \
+    parsing/pprintast.cmx \
+    parsing/parsetree.cmi \
+    parsing/parser_types.cmi \
+    parsing/parser.cmx \
+    parsing/longident.cmx \
+    parsing/location.cmx \
+    parsing/lexer.cmx \
+    parsing/camlinternalLrgrep_runtime.cmx \
+    parsing/asttypes.cmx \
+    parsing/ast_helper.cmx \
+    parsing/parse_errors.cmi
+parsing/parse_errors.cmi : \
+    parsing/parser.cmi \
+    parsing/location.cmi
 parsing/parser.cmo : \
     parsing/syntaxerr.cmi \
     parsing/parsetree.cmi \
+    parsing/parser_types.cmi \
     parsing/longident.cmi \
     parsing/location.cmi \
     parsing/docstrings.cmi \
@@ -499,6 +534,7 @@ parsing/parser.cmo : \
 parsing/parser.cmx : \
     parsing/syntaxerr.cmx \
     parsing/parsetree.cmi \
+    parsing/parser_types.cmi \
     parsing/longident.cmx \
     parsing/location.cmx \
     parsing/docstrings.cmx \
@@ -510,10 +546,18 @@ parsing/parser.cmx : \
     parsing/parser.cmi
 parsing/parser.cmi : \
     parsing/parsetree.cmi \
+    parsing/parser_types.cmi \
     parsing/longident.cmi \
     parsing/location.cmi \
     parsing/docstrings.cmi \
-    parsing/camlinternalMenhirLib.cmi
+    parsing/camlinternalMenhirLib.cmi \
+    parsing/asttypes.cmi \
+    parsing/ast_helper.cmi
+parsing/parser_types.cmi : \
+    parsing/parsetree.cmi \
+    parsing/location.cmi \
+    parsing/docstrings.cmi \
+    parsing/asttypes.cmi
 parsing/parsetree.cmi : \
     parsing/longident.cmi \
     parsing/location.cmi \
